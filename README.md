@@ -226,7 +226,7 @@ setx ICLOUD_APP_PASSWORD "abcd-efgh-ijkl-mnop"
 | `requirements.txt` | 依赖：`Flask>=3.0,<4`、`caldav>=3.0`（本项目实测于 caldav 3.3.0） |
 | `LICENSE` | MIT 许可证全文 |
 | `AGENTS.md` | 本项目的开发约定、接口契约与功能边界（改代码前建议先读） |
-| `STYLE.md` | 界面风格记录：当前生效的配色 / 字体 / 尺寸 / 状态语义，以及 `window.png`、`iPhone.png` 两张参考图的对照（改视觉前建议先读） |
+| `STYLE.md` / `window.png` / `iPhone.png` | 界面风格记录与参考图（本地保留，未随仓库发布） |
 | `events_cache.json` / `sync_token.json` | 运行时生成的本地缓存（已忽略提交，可随时删除） |
 
 ---
