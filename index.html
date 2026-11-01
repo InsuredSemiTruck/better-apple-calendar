@@ -347,6 +347,17 @@
       .day-heading--mobile{display:block;height:auto;padding:14px 16px 8px;border-bottom:0}
     }
 
+    /* ===== v15 日程悬停预览（Tooltip） ===== */
+    .event-tooltip{position:fixed;top:0;left:0;z-index:9999;display:grid;gap:3px;max-width:min(280px,calc(100vw - 16px));padding:8px 11px 9px;color:#FFFDF8;background:rgba(30,27,22,.92);border-radius:8px;box-shadow:0 8px 24px rgba(0,0,0,.16);backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px);font-family:var(--font);font-size:12px;line-height:1.45;overflow-wrap:anywhere;pointer-events:none;will-change:transform;opacity:0;transition:opacity .12s ease;transform:translate3d(-9999px,-9999px,0)}
+    .event-tooltip[hidden]{display:none}
+    .event-tooltip.is-visible{opacity:1}
+    .event-tooltip__title{color:#FFFDF8;font-size:12px;font-weight:700;line-height:1.35}
+    .event-tooltip__time{color:rgba(255,253,248,.8);font-variant-numeric:tabular-nums}
+    .event-tooltip__location{color:rgba(255,253,248,.9)}
+    .event-tooltip__calendar{display:flex;align-items:center;gap:5px;margin-top:1px;color:rgba(255,253,248,.72)}
+    .event-tooltip__dot{flex:0 0 auto;width:7px;height:7px;background:var(--event-color,#FFFDF8);border-radius:50%}
+    .event-tooltip__calendar-name{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+
   </style>
 </head>
 <body>
@@ -453,6 +464,15 @@
       <div class="day-events-list" id="day-events-list"></div>
     </section>
   </div>  <div class="toast" id="toast" hidden></div>
+  <div class="event-tooltip" id="event-tooltip" role="tooltip" aria-hidden="true" hidden>
+    <div class="event-tooltip__title"></div>
+    <div class="event-tooltip__time"></div>
+    <div class="event-tooltip__location"></div>
+    <div class="event-tooltip__calendar">
+      <span class="event-tooltip__dot"></span>
+      <span class="event-tooltip__calendar-name"></span>
+    </div>
+  </div>
   <div class="settings-popover" id="settings-panel" hidden>
     <h2>日历设置</h2>
     <div class="settings-status">
@@ -562,7 +582,151 @@ function createTimedEvent(event){const range=eventTimeRange(event);if(!range)ret
     function openCreate(day=selectedDate,hour=9){editingUid="";editingOriginalStart=null;editingAllDay=false;closeEventDelete();hideOccurrenceHint();const start=new Date(day);start.setHours(Number.isInteger(hour)?hour:9,0,0,0);const end=new Date(start);end.setHours(end.getHours()+1);eventForm.reset();populateCalendarSelect();eventSheetTitle.textContent="新建日程";eventTitle.value="";eventStart.value=toDateTimeInput(start);eventEnd.value=toDateTimeInput(end);eventLocation.value="";eventFormError.textContent="";eventSubmit.disabled=false;eventSubmit.textContent="添加";eventModal.hidden=false;window.setTimeout(()=>eventTitle.focus(),0)}
     function closeCreate(){eventModal.hidden=true;eventForm.reset();editingUid="";editingOriginalStart=null;editingAllDay=false;closeEventDelete();hideOccurrenceHint();eventSheetTitle.textContent="新建日程";eventFormError.textContent="";eventSubmit.disabled=false;eventSubmit.textContent="添加"}
 function openEdit(event){closeDayEvents();if(!event.uid)return;editingUid=event.uid;editingOriginalStart=event.start;editingAllDay=Boolean(event.allDay);eventForm.reset();populateCalendarSelect();eventCalendar.value=event.calendar;eventSheetTitle.textContent="编辑日程";eventTitle.value=event.title;eventStart.value=toDateTimeInput(event.start);eventEnd.value=toDateTimeInput(event.end);eventLocation.value=event.location||"";eventFormError.textContent="";eventSubmit.disabled=false;eventSubmit.textContent="保存";updateOccurrenceHint(event);isDeleteConfirming=false;renderEventDelete(event);eventModal.hidden=false;window.setTimeout(()=>eventTitle.focus(),0)}
-    function bindEventEdit(element,event){element.addEventListener("dblclick",eventInfo=>{if(Date.now()<suppressEditUntil)return;eventInfo.stopPropagation();clearEventSelection();openEdit(event)})}
+    function bindEventEdit(element,event){rememberEventTooltip(element,event);element.addEventListener("dblclick",eventInfo=>{if(Date.now()<suppressEditUntil)return;eventInfo.stopPropagation();clearEventSelection();openEdit(event)})}
+
+    /* ===== v15 日程悬停预览（Tooltip） ===== */
+    const EVENT_TOOLTIP_SELECTOR=".month-event,.month-span-event,.allday-bar,.timed-event,.long-event-item";
+    const EVENT_TOOLTIP_DELAY=300;
+    const EVENT_TOOLTIP_MARGIN=8;
+    const EVENT_TOOLTIP_GAP=14;
+    const eventTooltipData=new WeakMap();
+    const hoverPointerQuery=window.matchMedia("(hover:hover)");
+
+    let eventTooltipNode=null;
+    let eventTooltipParts=null;
+    let eventTooltipTarget=null;
+    let eventTooltipEvent=null;
+    let eventTooltipTimer=0;
+    let eventTooltipVisible=false;
+    let eventTooltipX=0;
+    let eventTooltipY=0;
+    let eventTooltipFrame=0;
+
+    function rememberEventTooltip(element,calendarEvent){
+      eventTooltipData.set(element,calendarEvent);
+    }
+
+    function getEventTooltip(){
+      if(eventTooltipNode&&eventTooltipNode.isConnected)return eventTooltipNode;
+      eventTooltipNode=document.querySelector("#event-tooltip");
+      if(!eventTooltipNode)return null;
+      eventTooltipParts={
+        title:eventTooltipNode.querySelector(".event-tooltip__title"),
+        time:eventTooltipNode.querySelector(".event-tooltip__time"),
+        location:eventTooltipNode.querySelector(".event-tooltip__location"),
+        calendar:eventTooltipNode.querySelector(".event-tooltip__calendar-name")
+      };
+      return eventTooltipNode;
+    }
+
+    function fillEventTooltip(calendarEvent){
+      const node=getEventTooltip();
+      if(!node||!eventTooltipParts)return false;
+      eventTooltipParts.title.textContent=calendarEvent.title;
+      eventTooltipParts.time.textContent=calendarEvent.allDay
+        ?"全天"
+        :`${formatClock(calendarEvent.start)} - ${formatClock(calendarEvent.end)}`;
+      eventTooltipParts.location.textContent=calendarEvent.location?`📍 ${calendarEvent.location}`:"";
+      eventTooltipParts.location.hidden=!calendarEvent.location;
+      eventTooltipParts.calendar.textContent=calendarEvent.calendar;
+      node.style.setProperty("--event-color",calendarEvent.color);
+      return true;
+    }
+
+    function placeEventTooltip(x,y){
+      const node=getEventTooltip();
+      if(!node)return;
+      const rect=node.getBoundingClientRect();
+      let left=x+EVENT_TOOLTIP_GAP;
+      let top=y+EVENT_TOOLTIP_GAP+2;
+      if(left+rect.width>window.innerWidth-EVENT_TOOLTIP_MARGIN)left=x-rect.width-EVENT_TOOLTIP_GAP;
+      if(top+rect.height>window.innerHeight-EVENT_TOOLTIP_MARGIN)top=y-rect.height-EVENT_TOOLTIP_GAP;
+      left=Math.max(EVENT_TOOLTIP_MARGIN,Math.min(left,window.innerWidth-rect.width-EVENT_TOOLTIP_MARGIN));
+      top=Math.max(EVENT_TOOLTIP_MARGIN,Math.min(top,window.innerHeight-rect.height-EVENT_TOOLTIP_MARGIN));
+      node.style.transform=`translate3d(${Math.round(left)}px, ${Math.round(top)}px, 0)`;
+    }
+
+    function showEventTooltip(){
+      if(!eventTooltipTarget||!eventTooltipEvent||!eventTooltipTarget.isConnected)return;
+      if(!fillEventTooltip(eventTooltipEvent))return;
+      const node=getEventTooltip();
+      if(!node)return;
+      node.hidden=false;
+      void node.offsetWidth;
+      placeEventTooltip(eventTooltipX,eventTooltipY);
+      node.classList.add("is-visible");
+      node.setAttribute("aria-hidden","false");
+      eventTooltipVisible=true;
+    }
+
+    function hideEventTooltip(){
+      window.clearTimeout(eventTooltipTimer);
+      eventTooltipTimer=0;
+      if(eventTooltipFrame){
+        window.cancelAnimationFrame(eventTooltipFrame);
+        eventTooltipFrame=0;
+      }
+      eventTooltipTarget=null;
+      eventTooltipEvent=null;
+      if(!eventTooltipVisible)return;
+      eventTooltipVisible=false;
+      const node=getEventTooltip();
+      if(!node)return;
+      node.classList.remove("is-visible");
+      node.setAttribute("aria-hidden","true");
+      node.hidden=true;
+    }
+
+    function scheduleEventTooltip(target,calendarEvent,x,y){
+      if(eventTooltipVisible&&target!==eventTooltipTarget)hideEventTooltip();
+      window.clearTimeout(eventTooltipTimer);
+      eventTooltipTarget=target;
+      eventTooltipEvent=calendarEvent;
+      eventTooltipX=x;
+      eventTooltipY=y;
+      eventTooltipTimer=window.setTimeout(()=>{
+        eventTooltipTimer=0;
+        showEventTooltip();
+      },EVENT_TOOLTIP_DELAY);
+    }
+
+    function eventTooltipTargetFrom(node){
+      return node instanceof Element?node.closest(EVENT_TOOLTIP_SELECTOR):null;
+    }
+
+    document.addEventListener("mouseover",mouseEvent=>{
+      const target=eventTooltipTargetFrom(mouseEvent.target);
+      if(!target||target===eventTooltipTarget)return;
+      if(!hoverPointerQuery.matches)return;
+      const calendarEvent=eventTooltipData.get(target);
+      if(!calendarEvent)return;
+      scheduleEventTooltip(target,calendarEvent,mouseEvent.clientX,mouseEvent.clientY);
+    });
+
+    document.addEventListener("mouseout",mouseEvent=>{
+      const target=eventTooltipTargetFrom(mouseEvent.target);
+      if(!target||target!==eventTooltipTarget)return;
+      if(mouseEvent.relatedTarget instanceof Node&&target.contains(mouseEvent.relatedTarget))return;
+      hideEventTooltip();
+    });
+
+    document.addEventListener("mousemove",mouseEvent=>{
+      if(!eventTooltipTarget)return;
+      if(eventTooltipTargetFrom(mouseEvent.target)!==eventTooltipTarget)return;
+      eventTooltipX=mouseEvent.clientX;
+      eventTooltipY=mouseEvent.clientY;
+      if(!eventTooltipVisible||eventTooltipFrame)return;
+      eventTooltipFrame=window.requestAnimationFrame(()=>{
+        eventTooltipFrame=0;
+        if(eventTooltipVisible)placeEventTooltip(eventTooltipX,eventTooltipY);
+      });
+    },{passive:true});
+
+    document.addEventListener("pointerdown",hideEventTooltip,true);
+    document.addEventListener("scroll",hideEventTooltip,true);
+    window.addEventListener("resize",hideEventTooltip);
+    window.addEventListener("blur",hideEventTooltip);
+    new MutationObserver(()=>hideEventTooltip()).observe(viewRoot,{childList:true});
     function bindEventDrag(element,calendarEvent){if(!calendarEvent.uid||isLongAllDay(calendarEvent))return;element.classList.add("can-drag");element.addEventListener("pointerdown",pointerEvent=>{if(pointerEvent.button!==0)return;const state={event:calendarEvent,element,pointerId:pointerEvent.pointerId,startX:pointerEvent.clientX,startY:pointerEvent.clientY,active:false,timer:null,ghost:null,target:null};state.timer=window.setTimeout(()=>{if(dragState!==state)return;state.active=true;suppressEditUntil=Date.now()+900;startDragGhost(state)},500);dragState=state})}
     function startDragGhost(state){const rect=state.element.getBoundingClientRect(),ghost=state.element.cloneNode(true);ghost.classList.add("drag-ghost");ghost.style.left=`${rect.left}px`;ghost.style.top=`${rect.top}px`;ghost.style.width=`${rect.width}px`;ghost.style.height=`${rect.height}px`;document.body.appendChild(ghost);state.ghost=ghost;state.element.classList.add("is-dragging");document.body.classList.add("is-dragging-event")}
     function clearDragTarget(state){if(state.target)state.target.classList.remove("is-drop-target");state.target=null}
