@@ -1,6 +1,6 @@
 # iCloud 日历网页版
 
-把 iCloud 日历搬进浏览器：在你的 Windows 电脑上跑一个本地小服务，用网页以 **日 / 周 / 月** 三种视图查看日历，并可直接 **新建、修改、拖动改期、删除** iCloud 上的日程。所有写操作都通过 CalDAV 真正写回 iCloud，iPhone / iPad / Mac 上的日历会同步变化。
+把 iCloud 日历搬进浏览器：在你的 **Windows 或 macOS** 电脑上跑一个本地小服务，用网页以 **日 / 周 / 月** 三种视图查看日历，并可直接 **新建、修改、拖动改期、删除** iCloud 上的日程。所有写操作都通过 CalDAV 真正写回 iCloud，iPhone / iPad / Mac 上的日历会同步变化。
 
 - **后端**：Python + Flask + [caldav](https://github.com/python-caldav/caldav)，凭据只从环境变量读取，不落盘、不进代码库
 - **前端**：原生 HTML / CSS / JavaScript 单文件，无框架、无构建步骤
@@ -48,10 +48,12 @@
 
 ### 0. 前置条件
 
-- Windows（其他系统理论上可用，未做验证）
+- **Windows 10/11** 或 **macOS 12+**（Linux 理论上可用，未做验证）
 - Python **3.10+**
+  - Windows：安装时勾选「Add python.exe to PATH」，用 `py -3 --version` 确认
+  - macOS：系统自带的 `python3` 可能过旧，先跑 `python3 --version`；低于 3.10 时用 `brew install python@3.12` 或从 <https://www.python.org/downloads/macos/> 安装。没装过命令行工具会提示 `xcode-select: error`，先执行 `xcode-select --install`
 - 一个开启了两步验证的 Apple ID
-- 如果使用代理软件，请确保它不会中断到 iCloud 的 CalDAV 连接
+- 如果使用代理软件，请确保它不会中断到 iCloud 的 CalDAV 连接（macOS 上尤其注意 Clash / Surge 的「系统代理」与「增强模式」，见[常见问题](#常见问题)）
 
 ### 1. 生成 App 专用密码
 
@@ -63,6 +65,8 @@
 
 ### 2. 获取代码并安装依赖
 
+**Windows（PowerShell）**
+
 ```powershell
 git clone https://github.com/InsuredSemiTruck/better-apple-calendar.git
 cd better-apple-calendar
@@ -72,18 +76,45 @@ py -3 -m venv .venv
 & ".\.venv\Scripts\python.exe" -m pip install -r requirements.txt
 ```
 
+**macOS（zsh，默认终端）**
+
+```zsh
+git clone https://github.com/InsuredSemiTruck/better-apple-calendar.git
+cd better-apple-calendar
+
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install --upgrade pip
+python -m pip install -r requirements.txt
+```
+
+> 虚拟环境不能跨系统复制：Windows 上建的 `.venv` 在 macOS 里不能用（反之亦然）。在另一台机器上重新执行本节的 `venv` 命令即可。
+>
+> macOS 激活后终端提示符前会出现 `(.venv)`，此时 `python` / `pip` 都指向虚拟环境；用 `deactivate` 退出。不想激活也行，把命令里的 `python` 换成 `./.venv/bin/python` 即可。
+
 ### 3. 配置环境变量
 
-**方式 A：只在当前终端生效（推荐，不写入注册表）**
+**方式 A：只在当前终端生效（推荐，不写入注册表 / shell 配置）**
+
+Windows（PowerShell）：
 
 ```powershell
 $env:ICLOUD_APPLE_ID = "你的AppleID@example.com"
 $env:ICLOUD_APP_PASSWORD = "abcd-efgh-ijkl-mnop"
 ```
 
+macOS（zsh）：
+
+```zsh
+export ICLOUD_APPLE_ID="你的AppleID@example.com"
+export ICLOUD_APP_PASSWORD="abcd-efgh-ijkl-mnop"
+```
+
 关掉当前终端后需要重新设置。
 
-**方式 B：持久保存到当前 Windows 用户**（新开终端生效；注意这是明文存放）
+**方式 B：持久保存到当前用户**（新开终端生效；注意这是明文存放）
+
+Windows（写入当前用户的注册表环境变量）：
 
 ```powershell
 setx ICLOUD_APPLE_ID "你的AppleID@example.com"
@@ -92,11 +123,30 @@ setx ICLOUD_APP_PASSWORD "abcd-efgh-ijkl-mnop"
 
 设置后需要关闭并重新打开终端，变量才会生效。
 
+macOS（追加到 `~/.zshrc`，仅当前用户可读；用 bash 的话换成 `~/.bash_profile`）：
+
+```zsh
+echo 'export ICLOUD_APPLE_ID="你的AppleID@example.com"' >> ~/.zshrc
+echo 'export ICLOUD_APP_PASSWORD="abcd-efgh-ijkl-mnop"' >> ~/.zshrc
+source ~/.zshrc
+```
+
 ### 4. 启动
+
+Windows（PowerShell）：
 
 ```powershell
 & ".\.venv\Scripts\python.exe" ".\app.py"
 ```
+
+macOS（zsh）：
+
+```zsh
+source .venv/bin/activate
+python app.py
+```
+
+（不激活也可以：`./.venv/bin/python app.py`）
 
 看到类似 `Running on http://127.0.0.1:5000` 就说明起来了。
 
@@ -106,8 +156,17 @@ setx ICLOUD_APP_PASSWORD "abcd-efgh-ijkl-mnop"
 
 > 起不来或读不到日历时，先单独跑一次连通性探测脚本，它会直接打印你的日历列表和未来 7 天的日程，能立刻区分是「凭据问题」还是「网页/服务问题」：
 >
+> Windows（PowerShell）：
+>
 > ```powershell
 > & ".\.venv\Scripts\python.exe" ".\icloud_calendar_probe.py"
+> ```
+>
+> macOS（zsh）：
+>
+> ```zsh
+> source .venv/bin/activate
+> python icloud_calendar_probe.py
 > ```
 
 ---
@@ -181,7 +240,7 @@ setx ICLOUD_APP_PASSWORD "abcd-efgh-ijkl-mnop"
 
 ## 数据与隐私
 
-- **凭据**：Apple ID 与 App 专用密码只在运行时从环境变量读取（`create_client()`），代码里没有硬编码、日志里不会打印，也永远不会写进缓存文件或 Git。至于「存在哪里」，取决于你在第 3 步选的方式：**方式 A**（`$env:`）只在当前终端进程的内存里，关掉终端就消失，不落任何磁盘；**方式 B**（`setx`）会把它们明文写进当前 Windows 用户的注册表里的环境变量，终端重开后长期有效，代价是磁盘上留了明文副本（介意的话就用方式 A，或改用系统的凭据管理器/启动脚本自行注入）。
+- **凭据**：Apple ID 与 App 专用密码只在运行时从环境变量读取（`create_client()`），代码里没有硬编码、日志里不会打印，也永远不会写进缓存文件或 Git。至于「存在哪里」，取决于你在第 3 步选的方式：**方式 A**（Windows 的 `$env:` / macOS 的 `export`）只在当前终端进程的内存里，关掉终端就消失，不落任何磁盘；**方式 B** 会把它们明文落盘——Windows 是写进当前用户注册表里的环境变量（`setx`），macOS 是追加到 `~/.zshrc`，两者都在终端重开后长期有效，代价是磁盘上留了明文副本（介意的话就用方式 A，或改用系统的凭据管理器 / 启动脚本自行注入；macOS 还可以用「钥匙串访问」存密码，再在启动脚本里 `export ICLOUD_APP_PASSWORD="$(security find-generic-password -s icloud-calendar -w)"`）。
 - **本地缓存**：运行时会生成两个文件 —— `events_cache.json`（事件缓存）与 `sync_token.json`（增量同步令牌）。里面是你的日程标题、时间、地点、UID 与资源 URL，**不含密码**；两者都已写进 `.gitignore`，不会进 Git。想强制全量重新同步，直接删掉这两个文件再启动即可。
 - **网络流向**：浏览器 ↔ 本机 `127.0.0.1:5000`（只在本机内），后端 ↔ iCloud CalDAV（HTTPS 直连）；没有第三方中转服务器。
 - **写操作是真的写**：新建、修改、拖动、删除都会写回 iCloud，手机与电脑上的日历会同步变化；**删除不可撤销**，建议先拿一条测试日程熟悉流程。
@@ -237,17 +296,47 @@ setx ICLOUD_APP_PASSWORD "abcd-efgh-ijkl-mnop"
 先确认两个环境变量都设好了（重启终端后再启动），然后单独跑一次探测脚本：
 
 ```powershell
+# Windows（PowerShell）
 & ".\.venv\Scripts\python.exe" ".\icloud_calendar_probe.py"
+```
+
+```zsh
+# macOS（zsh）
+source .venv/bin/activate
+python icloud_calendar_probe.py
 ```
 
 - 探测脚本报「CalDAV 连接或认证失败」→ 多半是 App 专用密码不对（注意：**不是** Apple ID 主密码），或 Apple ID 需要重新登录
 - 探测脚本正常、只有网页打不开 → 看 `app.py` 所在终端的日志
+- macOS 上 `command not found: python` → 忘了 `source .venv/bin/activate`，或改用 `./.venv/bin/python icloud_calendar_probe.py`
 
 **提示「连接 iCloud 失败，请稍后重试」**
 后端已自动重试 3 次仍失败才会这样提示。常见原因是代理软件（Clash / VPN / 抓包工具）中断了到 iCloud 的 TLS 长连接，或网络临时抖动：关掉代理、换网络后再点 ↻ 刷新。
 
 **提示 iCloud 连接超时**
 把 `CALENDAR_HTTP_TIMEOUT_SECONDS` 调到 `60` 再试；如果还是不行，检查代理软件或 IPv6 设置。
+Windows：`$env:CALENDAR_HTTP_TIMEOUT_SECONDS = "60"`；macOS：`export CALENDAR_HTTP_TIMEOUT_SECONDS=60`，然后重启服务。
+
+**macOS：一直卡在读取，日志里是 TLS 相关报错（Clash / Surge 等代理软件干扰）**
+这是 macOS 上最常见的一类问题，典型日志是 `SSL: UNEXPECTED_EOF_WHILE_READING`、`TLSV1_ALERT_…`、`Connection reset by peer`，或请求长时间无响应（后端重试 3 次后返回 503）。原因是 ClashX / Clash Verge / Surge / Quantumult 等工具默认开启「系统代理」，甚至开启「增强模式 / TUN」，把 `caldav.icloud.com` 的请求塞进代理隧道，而 iCloud 的 CalDAV 长连接对隧道并不友好。按这个顺序排查：
+
+1. **彻底退出**代理软件（菜单栏图标 → Quit，而不是只把开关关掉），再点 ↻ 刷新；
+2. 必须常开代理时，给它加分流规则：把 `caldav.icloud.com`、`*.icloud.com`、`*.apple.com` 设为 **DIRECT（直连）**，或把这些域名加入「绕过代理」列表；
+3. 确认终端里的代理变量没有残留：`env | grep -i proxy` 若有输出，先 `unset http_proxy https_proxy all_proxy`（GUI 启动的终端可能继承了系统代理设置）；
+4. 用 curl 单独确认 TLS 通不通（返回 `401` / `207` 都说明网络正常，证书有问题才会报错）：
+   ```zsh
+   curl -sS -o /dev/null -w "%{http_code}\n" https://caldav.icloud.com/
+   ```
+5. 仍不行就把超时调大：`export CALENDAR_HTTP_TIMEOUT_SECONDS=60`，或换一个网络（比如手机热点）验证是否是本机网络环境问题。
+
+**macOS：Finder 里看不到 `.venv`、`.gitignore`、`.env`？**
+macOS 默认隐藏以 `.` 开头的文件/文件夹（Windows 上叫「隐藏项目」）。在 Finder 窗口里按 **`⌘ + ⇧ + .`**（Command + Shift + 句号）即可显示/隐藏隐藏文件，再按一次恢复。终端里用 `ls -a` 也能看到。想直接进项目目录最省事的办法是在终端执行 `open .`（当前目录）或用 `open -a Finder .`。
+
+**macOS：`python3 -m venv .venv` 报错 / 装的包找不到**
+- 提示 `xcode-select: error: invalid active developer path` → 先 `xcode-select --install` 装命令行工具
+- `python3 --version` 低于 3.10 → 用 `brew install python@3.12`（装完是 `python3.12`，建环境用 `python3.12 -m venv .venv`）
+- 提示 `No module named flask` → 说明当前 `python` 不是虚拟环境里的那个，确认终端提示符带 `(.venv)`，或用 `./.venv/bin/python -c "import flask; print(flask.__version__)"` 检查
+- Apple Silicon 上用 Rosetta 终端（`arch` 显示 `i386`）可能装出架构不匹配的包，改用原生 arm64 终端重装即可
 
 **某些日程没有显示 / 看着是旧的**
 默认只查询**今天前后各 30 天**，翻页离开已加载范围时会自动请求新范围。若刚在手机上改过，点顶部 ↻ 或设置面板里的「立即同步」即可拉最新内容（缓存超过 10 分钟视为过期，读取时会自动后台刷新）。
@@ -268,6 +357,9 @@ setx ICLOUD_APP_PASSWORD "abcd-efgh-ijkl-mnop"
 
 **5000 端口被占用**
 设置环境变量 `PORT`（如 `5050`）再启动，然后访问 <http://127.0.0.1:5050>。
+
+- Windows：`$env:PORT = "5050"`，或先 `netstat -ano | findstr :5000` 找到占用进程
+- macOS：`export PORT=5050`，或先 `lsof -nP -iTCP:5000 -sTCP:LISTEN` 看是谁占着（`kill <PID>` 结束它）。macOS 上 `5000` 常被「隔空播放接收器 / AirPlay Receiver」占用，可在「系统设置 → 通用 → 隔空播放与接力」里关掉它
 
 **想换成别的 CalDAV 服务 / 中国区 iCloud**
 设置 `ICLOUD_CALDAV_URL`（例如 `https://caldav.icloud.com.cn/`）后重启。
@@ -308,7 +400,7 @@ setx ICLOUD_APP_PASSWORD "abcd-efgh-ijkl-mnop"
 ## 开发与自检
 
 ```powershell
-# 后端语法自检
+# Windows（PowerShell）：后端语法自检
 & ".\.venv\Scripts\python.exe" -m py_compile ".\app.py"
 
 # 连通性自检（列出日历 + 未来 7 天日程）
@@ -318,7 +410,21 @@ setx ICLOUD_APP_PASSWORD "abcd-efgh-ijkl-mnop"
 # 浏览器或 curl 打开 http://127.0.0.1:5000/api/status
 ```
 
-前端是单文件、无构建：改完 `index.html` 直接刷新浏览器即可（想校验脚本语法可把内联 `<script>` 抽出来跑一次 `node --check`）。
+```zsh
+# macOS（zsh）：后端语法自检
+source .venv/bin/activate
+python -m py_compile app.py
+
+# 连通性自检（列出日历 + 未来 7 天日程）
+python icloud_calendar_probe.py
+
+# 启动服务后查看缓存规模与同步时间
+curl -s http://127.0.0.1:5000/api/status | python -m json.tool
+```
+
+前端是单文件、无构建：改完 `index.html` 直接刷新浏览器即可（想校验脚本语法可把内联 `<script>` 抽出来跑一次 `node --check`；macOS 需先装 Node，例如 `brew install node`）。
+
+代码里所有文件路径都用 `Path(__file__).resolve().parent` / `app.root_path` 拼出来，没有硬编码盘符或 `/Users/...`，因此同一份代码在 Windows 与 macOS 上都能直接跑——写新脚本时请保持这一点。
 
 改代码前请先读 `AGENTS.md`：其中写明了 API 契约、缓存规则、循环日程的写入方式，以及「写回 iCalendar 必须用 `component.add()`」这类容易踩坑的约束。
 

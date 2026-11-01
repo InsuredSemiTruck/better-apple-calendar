@@ -7,7 +7,7 @@
 
 ## 项目背景
 - 通过 CalDAV 读取 iCloud 日历，并在网页中展示。
-- 运行环境：Windows 本地开发。
+- 运行环境：Windows / macOS 本地开发。
 - 后端入口：`app.py`。
 - 前端入口：`index.html`，使用原生 HTML、CSS 和 JavaScript。
 
@@ -21,6 +21,7 @@
 ## 必须遵守（Always）
 - CalDAV 认证使用 App 专用密码，从环境变量读取，绝不硬编码。
 - 每次改动后代码必须能直接运行，无语法错误。
+- 代码必须在 Windows 与 macOS 上都能直接运行：所有文件路径用 `Path(__file__).resolve().parent`（或 `app.root_path`）拼接，**禁止**硬编码 `D:\...`、`/Users/...`、`C:\Users\...` 之类的绝对路径；新增脚本/文档示例要同时给出 PowerShell 与 zsh 两种写法。
 - 前端继续使用原生 HTML、CSS 和 JavaScript，不引入前端框架。
 - 后端继续复用 `icloud_calendar_probe.py` 的 CalDAV 查询和解析逻辑。
 - API 保持 `{ "events": [...] }` 结构；事件字段为 `calendar`、`title`、`start`、`end`、可选 `location` 和 `uid`。
@@ -77,9 +78,43 @@
 - 日历颜色内置映射：个人为绿色、家庭为黄色、课程为红色/粉色、课外为橙色、计划/作业为紫色，其他日历使用稳定的备用颜色。
 
 ## 本地运行
+
+Windows（PowerShell）：
+
 ```powershell
-cd "D:\13411\desktop\codex_projects\apple_window_calendar"
+cd "D:\13411\desktop\codex_projects\apple_window_calendar"   # 换成你的实际路径
 & ".\.venv\Scripts\python.exe" ".\app.py"
 ```
 
+macOS（zsh）：
+
+```zsh
+cd ~/Documents/better-apple-calendar-main   # 换成你的实际路径
+source .venv/bin/activate
+python app.py
+# 不激活虚拟环境也可以，直接指定解释器：
+# ./.venv/bin/python app.py
+```
+
 浏览器访问：`http://127.0.0.1:5000`。
+
+首次在某个系统上运行时，需为该系统单独建虚拟环境（`.venv` 不能跨系统复制）：
+
+```zsh
+# macOS
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install -r requirements.txt
+```
+
+```powershell
+# Windows
+py -3 -m venv .venv
+& ".\.venv\Scripts\python.exe" -m pip install -r requirements.txt
+```
+
+环境变量：Windows 用 `$env:ICLOUD_APPLE_ID = "..."` / `$env:ICLOUD_APP_PASSWORD = "..."`，macOS 用 `export ICLOUD_APPLE_ID="..."` / `export ICLOUD_APP_PASSWORD="..."`；两者都只对当前终端生效，重启终端后需重新设置。
+
+自检（两边等价）：`py_compile app.py` 或 `python -m py_compile app.py`、`python icloud_calendar_probe.py`。
+
+macOS 排查提示：Clash / Surge 等代理软件的「系统代理」或「增强模式」会让 CalDAV 的 TLS 长连接失败（日志多为 `SSL: UNEXPECTED_EOF_WHILE_READING` 或超时），先彻底退出代理或给 `*.icloud.com` 加直连规则，再点 ↻ 刷新。
