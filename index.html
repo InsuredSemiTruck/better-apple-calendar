@@ -67,6 +67,15 @@
     #config-modal .event-form__actions{justify-content:stretch}
     #config-modal .sheet-button{width:100%}
     .config-field-status{display:block;margin-top:-2px;color:var(--muted-2);font-size:11px;line-height:1.4}
+    .config-status{display:grid;gap:9px;margin:16px 20px 0;padding:12px 14px;background:var(--selected);border-radius:8px}
+    .config-status__row{display:flex;align-items:center;gap:8px;min-height:18px;font-size:12px}
+    .config-status__dot{flex:none;width:8px;height:8px;background:#8e8e93;border-radius:50%}
+    .config-status__label{flex:none;min-width:84px;color:var(--muted-2)}
+    .config-status__value{flex:1;color:var(--text);line-height:1.4}
+    .config-status__row[data-state="ok"] .config-status__dot{background:#34c759}
+    .config-status__row[data-state="warn"] .config-status__dot{background:#ff9f0a}
+    .config-status__row[data-state="error"] .config-status__dot{background:#ff3b30}
+    .config-status__row[data-state="unknown"] .config-status__dot{background:#8e8e93}
     #ai-input-modal .event-sheet{width:min(620px,100%)}
     #ai-confirm-modal .event-sheet{width:min(760px,100%);max-height:min(86vh,860px)}
     .ai-card-list{display:grid;gap:12px;max-height:52vh;overflow:auto;padding-right:2px}
@@ -249,6 +258,7 @@
     .sheet-button--danger{background:#B8412E}
     .settings-popover{top:62px;right:22px;background:var(--paper-raise);border-color:var(--hairline);border-radius:12px}
     .settings-status{background:var(--panel)}
+    .config-status{background:var(--panel)}
     .settings-action{background:var(--accent)}
     .settings-action:hover{background:var(--accent-strong)}
     .toast{right:30px;bottom:30px;background:rgba(43,35,24,.94);border-radius:10px}
@@ -270,6 +280,7 @@
     html[data-theme="dark"] .event-sheet,html[data-theme="dark"] .settings-popover,html[data-theme="dark"] .unscheduled-card,html[data-theme="dark"] .day-event-row,html[data-theme="dark"] .long-event-item{background:var(--paper-raise)}
     html[data-theme="dark"] .sheet-button--secondary{background:#3A332A}
     html[data-theme="dark"] .settings-status{background:var(--panel)}
+    html[data-theme="dark"] .config-status{background:var(--panel)}
     html[data-theme="dark"] .form-field input,html[data-theme="dark"] .form-field select{background:var(--paper-raise);border-color:var(--hairline)}
 
     /* ===== v12 日/周视图：长按高亮后拖动改时长 ===== */
@@ -489,6 +500,28 @@
         <h2 id="config-sheet-title">初始化配置</h2>
         <button class="event-sheet__close" id="config-sheet-close" type="button" aria-label="关闭">×</button>
       </header>
+      <div class="config-status" id="config-status-overview" aria-live="polite">
+        <div class="config-status__row" id="config-status-apple" data-state="unknown">
+          <span class="config-status__dot" aria-hidden="true"></span>
+          <span class="config-status__label">Apple 账号</span>
+          <span class="config-status__value">读取中…</span>
+        </div>
+        <div class="config-status__row" id="config-status-password" data-state="unknown">
+          <span class="config-status__dot" aria-hidden="true"></span>
+          <span class="config-status__label">App 专用密码</span>
+          <span class="config-status__value">读取中…</span>
+        </div>
+        <div class="config-status__row" id="config-status-deepseek" data-state="unknown">
+          <span class="config-status__dot" aria-hidden="true"></span>
+          <span class="config-status__label">DeepSeek API</span>
+          <span class="config-status__value">读取中…</span>
+        </div>
+        <div class="config-status__row" id="config-status-sync" data-state="unknown">
+          <span class="config-status__dot" aria-hidden="true"></span>
+          <span class="config-status__label">上次同步</span>
+          <span class="config-status__value">读取中…</span>
+        </div>
+      </div>
       <form class="event-form" id="config-form">
         <p class="event-form__hint" id="config-form-hint">首次使用需要填写 iCloud 凭据。配置保存在项目根目录的 .env 文件中，不会上传到任何服务器。</p>
         <label class="form-field">
@@ -591,7 +624,7 @@
     const apiBase=(document.querySelector('meta[name="calendar-api-base"]').content||"").replace(/\/$/,""),apiUrl=`${apiBase}/api/events`;
     const viewRoot=document.querySelector("#view-root"),toolbarTitle=document.querySelector("#toolbar-title"),calendarList=document.querySelector("#calendar-list"),sidebar=document.querySelector("#sidebar"),viewButtons=Array.from(document.querySelectorAll("[data-view]")),addEventButton=document.querySelector(".toolbar-button--add"),eventModal=document.querySelector("#event-modal"),eventForm=document.querySelector("#event-form"),eventSheetClose=document.querySelector("#event-sheet-close"),eventCancel=document.querySelector("#event-cancel"),eventSubmit=document.querySelector("#event-submit"),eventTitle=document.querySelector("#event-title"),eventCalendar=document.querySelector("#event-calendar"),eventStart=document.querySelector("#event-start"),eventEnd=document.querySelector("#event-end"),eventLocation=document.querySelector("#event-location"),eventFormError=document.querySelector("#event-form-error"),eventSheetTitle=document.querySelector("#event-sheet-title"),refreshButton=document.querySelector("#refresh-button"),settingsButton=document.querySelector("#settings-button"),settingsPanel=document.querySelector("#settings-panel"),syncStatusText=document.querySelector("#sync-status-text"),syncStatusDetail=document.querySelector("#sync-status-detail"),syncNowButton=document.querySelector("#sync-now-button"),darkModeSetting=document.querySelector("#dark-mode-setting"),longEventsPanel=document.querySelector("#long-events-panel"),longEventsList=document.querySelector("#long-events-list"),dayEventsOverlay=document.querySelector("#day-events-overlay"),dayEventsList=document.querySelector("#day-events-list"),dayEventsClose=document.querySelector("#day-events-close"),dayEventsTitle=document.querySelector("#day-events-title"),eventFormHint=document.querySelector("#event-form-hint"),eventDeleteHint=document.querySelector("#event-delete-hint"),eventDeleteActions=document.querySelector("#event-delete-actions"),toolbarElement=document.querySelector(".toolbar"),viewToggleButton=document.querySelector("#view-toggle-button"),dayListButton=document.querySelector("#day-list-button"),todayButtonMobile=document.querySelector("#today-button-mobile");
     const configModal=document.querySelector("#config-modal"),configForm=document.querySelector("#config-form"),configAppleId=document.querySelector("#config-apple-id"),configAppPassword=document.querySelector("#config-app-password"),configDeepseekKey=document.querySelector("#config-deepseek-key"),configError=document.querySelector("#config-form-error"),configSubmit=document.querySelector("#config-submit");
-    const configSheetTitle=document.querySelector("#config-sheet-title"),configFormHint=document.querySelector("#config-form-hint"),configAppleIdStatus=document.querySelector("#config-apple-id-status"),configAppPasswordStatus=document.querySelector("#config-app-password-status"),configDeepseekStatus=document.querySelector("#config-deepseek-status"),configSettingsButton=document.querySelector("#config-settings-button"),configSheetClose=document.querySelector("#config-sheet-close");
+    const configSheetTitle=document.querySelector("#config-sheet-title"),configFormHint=document.querySelector("#config-form-hint"),configAppleIdStatus=document.querySelector("#config-apple-id-status"),configAppPasswordStatus=document.querySelector("#config-app-password-status"),configDeepseekStatus=document.querySelector("#config-deepseek-status"),configSettingsButton=document.querySelector("#config-settings-button"),configSheetClose=document.querySelector("#config-sheet-close"),configStatusApple=document.querySelector("#config-status-apple"),configStatusPassword=document.querySelector("#config-status-password"),configStatusDeepseek=document.querySelector("#config-status-deepseek"),configStatusSync=document.querySelector("#config-status-sync");
     const aiParseButton=document.querySelector("#ai-parse-button"),aiInputModal=document.querySelector("#ai-input-modal"),aiInputForm=document.querySelector("#ai-input-form"),aiInputText=document.querySelector("#ai-input-text"),aiInputError=document.querySelector("#ai-input-error"),aiInputSubmit=document.querySelector("#ai-input-submit"),aiInputCancel=document.querySelector("#ai-input-cancel"),aiInputClose=document.querySelector("#ai-input-close"),aiConfirmModal=document.querySelector("#ai-confirm-modal"),aiConfirmForm=document.querySelector("#ai-confirm-form"),aiCalendarSelect=document.querySelector("#ai-calendar-select"),aiCardList=document.querySelector("#ai-card-list"),aiConfirmError=document.querySelector("#ai-confirm-error"),aiConfirmSubmit=document.querySelector("#ai-confirm-submit"),aiConfirmCancel=document.querySelector("#ai-confirm-cancel"),aiConfirmClose=document.querySelector("#ai-confirm-close");
     const HOUR_START=0,HOUR_END=24,HOUR_HEIGHT=52,WEEKDAY_SHORT=["日","一","二","三","四","五","六"],WEEKDAY_LONG=["星期日","星期一","星期二","星期三","星期四","星期五","星期六"],MONTH_NAMES=["一月","二月","三月","四月","五月","六月","七月","八月","九月","十月","十一月","十二月"];
     const CALENDAR_RULES=[{pattern:/个人|personal/i,color:"#6F7F32"},{pattern:/家庭|family/i,color:"#E3A93C"},{pattern:/课程|class|course/i,color:"#D2502C"},{pattern:/课外|extracurricular/i,color:"#C9782F"},{pattern:/计划|作业|plan|homework|assignment/i,color:"#2F6F6B"}];
@@ -867,7 +900,11 @@ function openEdit(event){closeDayEvents();if(!event.uid)return;editingUid=event.
     function isMissingConfigError(error){return Boolean(error&&/缺少配置|缺少环境变量/.test(String(error.message||"")))}
     let configMode="setup";
     function setConfigFieldStatus(element,configured){if(!element)return;if(configured===true)element.textContent="已配置（如需修改请重新输入）";else if(configured===false)element.textContent="未配置";else element.textContent="状态未知；留空将保留现有值"}
-    async function refreshConfigStatus(){if(configAppleIdStatus)configAppleIdStatus.textContent="读取中…";if(configAppPasswordStatus)configAppPasswordStatus.textContent="读取中…";if(configDeepseekStatus)configDeepseekStatus.textContent="读取中…";try{const response=await fetch(`${apiBase}/api/config`,{headers:{Accept:"application/json"}}),payload=await response.json().catch(()=>({}));if(!response.ok)throw new Error(payload.error||`读取配置状态失败（${response.status}）`);const configured=payload.configured||{};setConfigFieldStatus(configAppleIdStatus,configured.appleId);setConfigFieldStatus(configAppPasswordStatus,configured.appPassword);setConfigFieldStatus(configDeepseekStatus,configured.deepseekApiKey)}catch(error){setConfigFieldStatus(configAppleIdStatus,null);setConfigFieldStatus(configAppPasswordStatus,null);setConfigFieldStatus(configDeepseekStatus,null)}}
+    function setConfigStatusRow(row,state,text){if(!row)return;row.dataset.state=state;const value=row.querySelector(".config-status__value");if(value)value.textContent=text}
+    function resetConfigStatusOverview(){[configStatusApple,configStatusPassword,configStatusDeepseek,configStatusSync].forEach(row=>setConfigStatusRow(row,"unknown","读取中…"))}
+    async function fetchConfigStatusPayload(url){try{const response=await fetch(url,{headers:{Accept:"application/json"}}),payload=await response.json().catch(()=>({}));return response.ok?payload:null}catch(error){return null}}
+    function applyConfigOverview(configured,statusPayload){if(!configured){setConfigStatusRow(configStatusApple,"unknown","状态未知");setConfigStatusRow(configStatusPassword,"unknown","状态未知");setConfigStatusRow(configStatusDeepseek,"unknown","状态未知")}else{const appleSaved=Boolean(configured.appleId),passwordSaved=Boolean(configured.appPassword),deepseekSaved=Boolean(configured.deepseekApiKey);if(appleSaved&&passwordSaved)setConfigStatusRow(configStatusApple,"ok","已保存凭据（未验证登录）");else if(appleSaved||passwordSaved)setConfigStatusRow(configStatusApple,"warn","凭据不完整（缺少 Apple ID 或密码）");else setConfigStatusRow(configStatusApple,"warn","未配置");setConfigStatusRow(configStatusPassword,passwordSaved?"ok":"warn",passwordSaved?"已保存":"未配置");setConfigStatusRow(configStatusDeepseek,deepseekSaved?"ok":"warn",deepseekSaved?"已配置，AI 提取可用":"未配置，AI 提取不可用")}if(!statusPayload){setConfigStatusRow(configStatusSync,"error","同步状态不可用")}else if(!statusPayload.updated_at){setConfigStatusRow(configStatusSync,"warn","尚未同步")}else{const parts=[formatSyncTime(statusPayload.updated_at)];if(Number.isFinite(Number(statusPayload.events)))parts.push(`已缓存 ${statusPayload.events} 条日程`);if(Number.isFinite(Number(statusPayload.calendars)))parts.push(`${statusPayload.calendars} 个日历`);setConfigStatusRow(configStatusSync,"ok",parts.join(" · "))}}
+    async function refreshConfigStatus(){if(configAppleIdStatus)configAppleIdStatus.textContent="读取中…";if(configAppPasswordStatus)configAppPasswordStatus.textContent="读取中…";if(configDeepseekStatus)configDeepseekStatus.textContent="读取中…";resetConfigStatusOverview();const [configPayload,statusPayload]=await Promise.all([fetchConfigStatusPayload(`${apiBase}/api/config`),fetchConfigStatusPayload(`${apiBase}/api/status`)]),configured=configPayload?configPayload.configured||{}:null;setConfigFieldStatus(configAppleIdStatus,configured?Boolean(configured.appleId):null);setConfigFieldStatus(configAppPasswordStatus,configured?Boolean(configured.appPassword):null);setConfigFieldStatus(configDeepseekStatus,configured?Boolean(configured.deepseekApiKey):null);applyConfigOverview(configured,statusPayload)}
     function closeConfigWizard(){if(!configModal)return;configModal.hidden=true;if(configForm)configForm.reset();if(configError)configError.textContent="";if(configSubmit){configSubmit.disabled=false;configSubmit.textContent=configMode==="modify"?"保存":"保存并启动"}}
     function openConfigWizard(mode="setup"){if(!configModal)return;configMode=mode==="modify"?"modify":"setup";configModal.hidden=false;if(configForm)configForm.reset();if(configError)configError.textContent="";if(configSubmit){configSubmit.disabled=false;configSubmit.textContent=configMode==="modify"?"保存":"保存并启动"}if(configSheetTitle)configSheetTitle.textContent=configMode==="modify"?"修改账号与配置":"初始化配置";if(configFormHint)configFormHint.textContent=configMode==="modify"?"留空的字段会保留现有配置；出于安全考虑，已保存的密码不会显示。":"首次使用需要填写 iCloud 凭据。配置保存在项目根目录的 .env 文件中，不会上传到任何服务器。";if(configAppleIdStatus)configAppleIdStatus.textContent="";if(configAppPasswordStatus)configAppPasswordStatus.textContent="";if(configDeepseekStatus)configDeepseekStatus.textContent="";window.setTimeout(()=>configAppleId?.focus(),0);void refreshConfigStatus()}
     async function submitConfig(event){event.preventDefault();const appleId=configAppleId.value.trim(),appPassword=configAppPassword.value.trim(),deepseekApiKey=configDeepseekKey.value.trim();if(!appleId&&!appPassword&&!deepseekApiKey){configError.textContent="请至少填写一项配置";return}if(configMode==="setup"&&(!appleId||!appPassword)){configError.textContent=!appleId?"请填写 Apple ID":"请填写 App 专用密码";(!appleId?configAppleId:configAppPassword).focus();return}configError.textContent="";configSubmit.disabled=true;configSubmit.textContent="正在保存…";try{const response=await fetch(`${apiBase}/api/config`,{method:"POST",headers:{"Content-Type":"application/json",Accept:"application/json"},body:JSON.stringify({appleId,appPassword,deepseekApiKey})});const payload=await response.json().catch(()=>({}));if(!response.ok)throw new Error(payload.error||`保存失败（${response.status}）`);configSubmit.textContent="正在重新载入…";window.location.reload()}catch(error){configError.textContent=error.message;configSubmit.disabled=false;configSubmit.textContent=configMode==="modify"?"保存":"保存并启动"}}

@@ -108,6 +108,8 @@
 
 <!-- 新增：设置面板配置入口 / 部分更新规则 -->
 - 设置面板提供「修改账号与配置」入口，复用 `#config-modal`：`modify` 模式标题为“修改账号与配置”、按钮为“保存”；输入框始终空白，`GET /api/config` 只用于显示“已配置（如需修改请重新输入）”；可通过右上角 × / 遮罩 / Esc 关闭，关闭不保存修改。
+<!-- 新增：配置窗口账号状态概览（方案 A：只读本地状态，不做登录校验） -->
+- 配置模态框顶部提供「当前账号状态」卡片（4 行：Apple 账号 / App 专用密码 / DeepSeek API / 上次同步），数据只来自 `GET /api/config` 与 `GET /api/status`：Apple 行只表达“凭据是否已保存（未验证登录）”，不做真实登录校验、不新增接口、打开弹窗时不额外访问 iCloud；`/api/config` 读取失败时前 3 行显示“状态未知”，`/api/status` 读取失败时只把“上次同步”行显示“同步状态不可用”，不得因此阻断保存流程。
 - 留空字段保留原值：只改密码、只改 DeepSeek Key、只改同账号 Apple ID 都不应覆盖其他配置；三项全空返回 400。
 - 更换 Apple ID 且 App 专用密码留空时返回 400「更换 Apple ID 时必须填写新的 App 专用密码」；Apple ID 变化时仍沿用 `account_fingerprint` / `invalidated_at` 让旧缓存失效。
 - 保存成功后 `window.location.reload()`；页面启动时的 `silentRefresh()` 负责重新同步。`GET /api/config` 与 `POST /api/config` 响应均不得包含凭据。
