@@ -4,4 +4,4 @@ __pycache__/
 events_cache.json*
 sync_token.json*
 .kagent/
-
+.DS_Store
