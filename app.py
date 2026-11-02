@@ -40,7 +40,7 @@ app.json.ensure_ascii = False
 BASE_DIR = Path(__file__).resolve().parent
 CONFIG_ENV_FILE = BASE_DIR / ".env"
 CONFIG_REQUIRED_KEYS = ("ICLOUD_APPLE_ID", "ICLOUD_APP_PASSWORD")
-load_dotenv(CONFIG_ENV_FILE)
+load_dotenv(CONFIG_ENV_FILE, override=True)
 
 EVENTS_CACHE_FILE = BASE_DIR / "events_cache.json"
 SYNC_TOKEN_FILE = BASE_DIR / "sync_token.json"

@@ -2,7 +2,8 @@
 
 把 iCloud 日历搬进浏览器：在你的 **Windows 或 macOS** 电脑上跑一个本地小服务，用网页以 **日 / 周 / 月** 三种视图查看日历，并可直接 **新建、修改、拖动改期、删除** iCloud 上的日程。所有写操作都通过 CalDAV 真正写回 iCloud，iPhone / iPad / Mac 上的日历会同步变化。
 
-- **后端**：Python + Flask + [caldav](https://github.com/python-caldav/caldav)，凭据只从环境变量读取，不落盘、不进代码库
+<!-- 修改：补充 python-dotenv 与 .env 凭据说明 -->
+- **后端**：Python + Flask + [caldav](https://github.com/python-caldav/caldav) + `python-dotenv`，凭据优先从项目根目录 `.env` 读取（也支持系统环境变量），不硬编码、不进 Git
 - **前端**：原生 HTML / CSS / JavaScript 单文件，无框架、无构建步骤
 - **数据**：本地 JSON 缓存（`events_cache.json` / `sync_token.json`），已在 `.gitignore` 中忽略
 
@@ -32,6 +33,7 @@
 
 ## 功能一览
 
+<!-- 新增：功能一览新增「配置向导」「启动自动同步」 -->
 | 分类 | 功能 |
 | --- | --- |
 | 视图 | 月视图（**上下滚动连着看上/下一个月**：当前月高亮、相邻月变淡、月份标题条跟手滚；周日起始、跨天事件横条、每格「其他 X 个日程…」折叠）、周视图、日视图（00:00–24:00 可滚动时间轴、当前时间线） |
@@ -40,6 +42,8 @@
 | 全天事件 | 单独一行显示；超长连续全天事件（超过 5 天）收进下方「超长连续全天日程」面板 |
 | 筛选 | 左侧日历列表复选框按日历显示/隐藏；日历有内置配色（个人=绿、家庭=黄、课程=红、课外=橙、计划/作业=紫，其他日历自动分配稳定颜色） |
 | 设置 | 齿轮面板：上次同步时间 + 缓存条数、「立即同步」按钮、深色模式开关（记忆在浏览器本地） |
+| 配置向导 | 首次缺少凭据时网页自动弹出「初始化配置」；也可访问 `/?setup=1` 重新配置。填写 Apple ID、App 专用密码、可选 DeepSeek Key，保存后写入 `.env` 并自动重载 |
+| 启动自动同步 | 页面首次加载完成后自动静默调用一次 `POST /api/refresh`，成功后直接更新视图，不弹 Toast |
 | 同步 | 本地缓存 + 增量刷新；右上角 ↻ 可手动刷新；缓存过期后读取时会自动后台刷新 |
 
 ---
@@ -92,44 +96,46 @@ python -m pip install -r requirements.txt
 >
 > macOS 激活后终端提示符前会出现 `(.venv)`，此时 `python` / `pip` 都指向虚拟环境；用 `deactivate` 退出。不想激活也行，把命令里的 `python` 换成 `./.venv/bin/python` 即可。
 
-### 3. 配置环境变量
+<!-- 修改：快速开始第 3 步改为「两种配置方式」，推荐直接启动后在网页向导中填写 -->
+### 3. 配置凭据（两种方式，任选其一）
 
-**方式 A：只在当前终端生效（推荐，不写入注册表 / shell 配置）**
+**方式一（推荐，零配置文件）**
+
+不需要提前设置环境变量。直接按第 4 步启动服务，然后打开网页：
+
+- 如果还没有任何凭据，页面会自动弹出「初始化配置」；
+- 如果本地已有缓存但缺少凭据，页面会先显示缓存，点右上角 `↻` 或访问 <http://127.0.0.1:5000/?setup=1> 打开向导。
+- 填写 Apple ID、App 专用密码（可选 DeepSeek API Key），点「保存并启动」。后端会写入项目根目录 `.env`，页面自动刷新并开始同步。
+
+**方式二（进阶，手动编辑 `.env`）**
+
+复制模板并填写。
 
 Windows（PowerShell）：
 
 ```powershell
-$env:ICLOUD_APPLE_ID = "你的AppleID@example.com"
-$env:ICLOUD_APP_PASSWORD = "abcd-efgh-ijkl-mnop"
+Copy-Item .\env.example .\.env
+notepad .\.env
 ```
 
 macOS（zsh）：
 
 ```zsh
-export ICLOUD_APPLE_ID="你的AppleID@example.com"
-export ICLOUD_APP_PASSWORD="abcd-efgh-ijkl-mnop"
+cp env.example .env
+open -e .env
 ```
 
-关掉当前终端后需要重新设置。
+`.env` 内容示例：
 
-**方式 B：持久保存到当前用户**（新开终端生效；注意这是明文存放）
-
-Windows（写入当前用户的注册表环境变量）：
-
-```powershell
-setx ICLOUD_APPLE_ID "你的AppleID@example.com"
-setx ICLOUD_APP_PASSWORD "abcd-efgh-ijkl-mnop"
+```dotenv
+ICLOUD_APPLE_ID=你的AppleID@example.com
+ICLOUD_APP_PASSWORD=abcd-efgh-ijkl-mnop
+DEEPSEEK_API_KEY=
 ```
 
-设置后需要关闭并重新打开终端，变量才会生效。
+保存后按第 4 步启动。`.env` 已被 `.gitignore` 忽略，不会提交到 Git。
 
-macOS（追加到 `~/.zshrc`，仅当前用户可读；用 bash 的话换成 `~/.bash_profile`）：
-
-```zsh
-echo 'export ICLOUD_APPLE_ID="你的AppleID@example.com"' >> ~/.zshrc
-echo 'export ICLOUD_APP_PASSWORD="abcd-efgh-ijkl-mnop"' >> ~/.zshrc
-source ~/.zshrc
-```
+> 仍支持系统环境变量（`$env:...` / `export ...`）；但本项目使用 `load_dotenv(..., override=True)`，**同名变量以 `.env` 为准**。
 
 ### 4. 启动
 
@@ -154,6 +160,9 @@ python app.py
 
 浏览器访问 <http://127.0.0.1:5000>，首次加载会从 iCloud 拉取**今天前后各 30 天**的日程。首次加载需要从 iCloud 拉取约 60 天日程，会慢一些；之后有本地缓存，加载会快很多。
 
+<!-- 修改：说明首次加载后的静默增量刷新 -->
+页面渲染完成后，前端还会在后台静默调用一次 `POST /api/refresh` 做增量同步；成功后直接更新当前视图，不会弹 Toast。
+
 > 起不来或读不到日历时，先单独跑一次连通性探测脚本，它会直接打印你的日历列表和未来 7 天的日程，能立刻区分是「凭据问题」还是「网页/服务问题」：
 >
 > Windows（PowerShell）：
@@ -173,12 +182,16 @@ python app.py
 
 ## 环境变量
 
-只有前两个是**必填**，其余都有默认值，按需覆盖即可。
+<!-- 新增：说明 .env 与 env.example -->
+只有前两个是**必填**，其余都有默认值，按需覆盖即可。所有变量都可以写在项目根目录 `.env` 中（模板见 `env.example`），也可以继续用系统环境变量；`app.py` 使用 `load_dotenv(CONFIG_ENV_FILE, override=True)`，因此 `.env` 中的同名变量优先。
+
+<!-- 新增：环境变量表新增 DEEPSEEK_API_KEY -->
 
 | 变量 | 必填 | 默认值 | 说明 |
 | --- | :-: | --- | --- |
 | `ICLOUD_APPLE_ID` | ✅ | — | 你的 Apple ID（邮箱） |
 | `ICLOUD_APP_PASSWORD` | ✅ | — | App 专用密码（`xxxx-xxxx-xxxx-xxxx`），**不是** Apple ID 主密码 |
+| `DEEPSEEK_API_KEY` | ❌ | — | 预留的 DeepSeek Key；配置向导会保存它，但当前日历功能不依赖它 |
 | `ICLOUD_CALDAV_URL` | ❌ | `https://caldav.icloud.com/` | CalDAV 入口；iCloud 中国区账号可尝试 `https://caldav.icloud.com.cn/` |
 | `ICLOUD_TIMEZONE` | ❌ | `Asia/Shanghai` | 判定「今天」、解析无时区时间、全天事件归属的时区；时间显示不对就改这里（如 `Asia/Tokyo`） |
 | `CALENDAR_CACHE_TTL_SECONDS` | ❌ | `600`（最小 30） | 缓存多久后视为过期；过期后读取会在后台自动增量刷新 |
@@ -193,8 +206,10 @@ python app.py
 
 ## 使用说明
 
+<!-- 新增：使用说明新增「配置 / 重新配置凭据」 -->
 | 想做什么 | 怎么做 |
 | --- | --- |
+| 配置 / 重新配置凭据 | 首次缺少配置会自动弹出向导；已有缓存时点 ↻ 或访问 `/?setup=1`。填写后保存并启动 |
 | 切换视图 | 顶部中间的「日 / 周 / 月」分段按钮 |
 | 前后翻页 | 顶部 `‹` / `›`（月视图翻月、周视图翻周、日视图翻天） |
 | 浏览相邻月份 | 月视图里直接**上下滚动**就能连着看上/下一个月（月份标题条跟着滚、当前月自动高亮、相邻月变淡）；也可以用顶部 `‹`/`›` 翻月，「今天」回到本月 |
@@ -240,8 +255,11 @@ python app.py
 
 ## 数据与隐私
 
-- **凭据**：Apple ID 与 App 专用密码只在运行时从环境变量读取（`create_client()`），代码里没有硬编码、日志里不会打印，也永远不会写进缓存文件或 Git。至于「存在哪里」，取决于你在第 3 步选的方式：**方式 A**（Windows 的 `$env:` / macOS 的 `export`）只在当前终端进程的内存里，关掉终端就消失，不落任何磁盘；**方式 B** 会把它们明文落盘——Windows 是写进当前用户注册表里的环境变量（`setx`），macOS 是追加到 `~/.zshrc`，两者都在终端重开后长期有效，代价是磁盘上留了明文副本（介意的话就用方式 A，或改用系统的凭据管理器 / 启动脚本自行注入；macOS 还可以用「钥匙串访问」存密码，再在启动脚本里 `export ICLOUD_APP_PASSWORD="$(security find-generic-password -s icloud-calendar -w)"`）。
+<!-- 修改：凭据现在优先来自 .env，并说明本地明文与权限 -->
+- **凭据**：Apple ID、App 专用密码（以及可选的 DeepSeek Key）优先从项目根目录 `.env` 读取（`python-dotenv`，`override=True`）；也可用系统环境变量。网页「初始化配置」通过 `POST /api/config` 写入 `.env`，不会硬编码、不会打印到日志、不会写进缓存或 Git。`.env` 是本机明文文件（POSIX 下会尽量设为 `0600`），已被 `.gitignore` 忽略；只提交 `env.example` 模板。
 - **本地缓存**：运行时会生成两个文件 —— `events_cache.json`（事件缓存）与 `sync_token.json`（增量同步令牌）。里面是你的日程标题、时间、地点、UID 与资源 URL，**不含密码**；两者都已写进 `.gitignore`，不会进 Git。想强制全量重新同步，直接删掉这两个文件再启动即可。
+<!-- 新增：说明更换 Apple ID 的缓存处理 -->
+- **更换 Apple ID**：保存新配置时，后端会在缓存中写入账号指纹/失效标记，不删除 `events_cache.json`，但会忽略上一个账号的残留缓存，并在下一次同步时用新账号数据替换。
 - **网络流向**：浏览器 ↔ 本机 `127.0.0.1:5000`（只在本机内），后端 ↔ iCloud CalDAV（HTTPS 直连）；没有第三方中转服务器。
 - **写操作是真的写**：新建、修改、拖动、删除都会写回 iCloud，手机与电脑上的日历会同步变化；**删除不可撤销**，建议先拿一条测试日程熟悉流程。
 - **不要暴露到公网**：服务只绑定 `127.0.0.1`，且没有登录鉴权。若确实要远程访问，请自行加反向代理 + HTTPS + 访问控制，并注意本服务能读写你的全部日历。
@@ -252,6 +270,7 @@ python app.py
 
 后端是一个很薄的 JSON 层，想二次开发（或者自己写个前端）可以直接用：
 
+<!-- 新增：HTTP 接口新增 POST /api/config -->
 | 方法 | 路径 | 说明 |
 | --- | --- | --- |
 | `GET` | `/` | 返回前端页面 `index.html` |
@@ -259,8 +278,12 @@ python app.py
 | `POST` | `/api/events` | 新建日程。请求体 `{title, calendar, start, end, location?}`；`start`/`end` 用带时区的 ISO 时间，全天日程用 `YYYY-MM-DD`。成功返回 `201 {"event":{...}}` |
 | `PUT` | `/api/events/<uid>` | 修改日程，请求体 `{title, calendar, start, end, location?, recurrenceId?}`。`calendar` 与当前不同＝把日程移动到该日历；循环日程必须带 `recurrenceId`（被修改那次的开始时间），只改这一次 |
 | `DELETE` | `/api/events/<uid>` | 删除日程，请求体 `{scope, recurrenceId?}`。`scope="series"`（默认）＝删除整个日程/整个重复系列；`scope="instance"`＝只删循环日程的某一次（需带 `recurrenceId`）；非循环日程一律删除整条 |
+| `POST` | `/api/config` | 保存凭据到 `.env` 并立即更新当前进程环境变量。请求体 `{appleId, appPassword, deepseekApiKey?}`；成功返回 `{"ok": true}`。`deepseekApiKey` 为空时保留已有值 |
 | `POST` | `/api/refresh` | 立即同步一次并返回最新缓存：`{events, updated_at, range:{start,end}}` |
 | `GET` | `/api/status` | 只读的同步状态：`{updated_at, events, calendars, age_seconds, cache_ttl_seconds}` |
+
+<!-- 新增：说明缺少配置时的返回与缓存优先 -->
+缺少 `ICLOUD_APPLE_ID` / `ICLOUD_APP_PASSWORD` 时：若当前范围有缓存，`GET /api/events` 仍返回缓存；无可用缓存则返回 `503 {"error":"缺少配置：..."}`，前端据此弹出配置向导。`POST /api/refresh` 在缺少配置时返回 503。
 
 **事件字段**：`calendar`（日历名）、`title`、`start`、`end`、`location`（可能为空串）、`uid`。全天日程的 `start`/`end` 是纯日期（`YYYY-MM-DD`，`end` 为不含当天的那一天），定时日程是带时区偏移的 ISO 8601 字符串。
 
@@ -277,12 +300,15 @@ python app.py
 
 ## 项目结构
 
+<!-- 新增：项目结构新增 env.example 与 .env -->
 | 文件 | 作用 |
 | --- | --- |
 | `app.py` | Flask 服务：缓存与增量同步、读取、新建、修改（含循环日程只改此次）、删除（含只删此次）、CalDAV 定位与瞬时故障重试 |
 | `icloud_calendar_probe.py` | 独立探测脚本：列出你的日历 + 打印未来 7 天日程，用来快速验证凭据与网络 |
 | `index.html` | 单文件前端：月/周/日视图、拖动改期、编辑与删除面板、设置面板（原生 HTML/CSS/JS，无框架无构建） |
-| `requirements.txt` | 依赖：`Flask>=3.0,<4`、`caldav>=3.0`（本项目实测于 caldav 3.3.0） |
+| `requirements.txt` | 依赖：`Flask>=3.0,<4`、`caldav>=3.0`、`python-dotenv>=1.0,<2`（本项目实测于 caldav 3.6.0） |
+| `env.example` | `.env` 模板：Apple ID、App 专用密码、可选 DeepSeek Key |
+| `.env` | 配置向导或手动生成，已被 `.gitignore` 忽略，不提交 |
 | `LICENSE` | MIT 许可证全文 |
 | `AGENTS.md` | 本项目的开发约定、接口契约与功能边界（改代码前建议先读） |
 | `STYLE.md` / `window.png` / `iPhone.png` | 界面风格记录与参考图（本地保留，未随仓库发布） |
@@ -293,7 +319,8 @@ python app.py
 ## 常见问题
 
 **页面提示「无法读取日历」**
-先确认两个环境变量都设好了（重启终端后再启动），然后单独跑一次探测脚本：
+<!-- 修改：补充 .env / 配置向导 -->
+先确认 `.env` 或系统环境变量中有凭据（也可以访问 `/?setup=1` 重新填写），然后单独跑一次探测脚本：
 
 ```powershell
 # Windows（PowerShell）
@@ -364,6 +391,19 @@ macOS 默认隐藏以 `.` 开头的文件/文件夹（Windows 上叫「隐藏项
 **想换成别的 CalDAV 服务 / 中国区 iCloud**
 设置 `ICLOUD_CALDAV_URL`（例如 `https://caldav.icloud.com.cn/`）后重启。
 
+<!-- 新增：配置向导 / .env / 账号切换 FAQ -->
+**首次打开没有弹出「初始化配置」？**
+说明当前范围已有本地缓存，页面会优先显示缓存。点右上角 `↻`（缺少配置时会打开向导），或访问 <http://127.0.0.1:5000/?setup=1>。
+
+**`.env` 在哪里？填错了怎么改？**
+在项目根目录（与 `app.py` 同级）。可以直接编辑，也可以访问 `/?setup=1` 重新填写；保存后页面会自动刷新。
+
+**换了 Apple ID，为什么旧数据不见了 / 还在？**
+保存新配置时后端会写入账号指纹与失效标记，不会删除 `events_cache.json`，但旧账号缓存会被忽略，下一次同步用新账号数据替换。若仍看到旧数据，点 ↻ 触发同步。
+
+**配置保存成功但读不到日历？**
+检查终端是否还在用旧进程；重启 `python app.py`。若终端里导出过旧的 `ICLOUD_APPLE_ID`，`.env` 现在会覆盖它（`override=True`）。
+
 ---
 
 ## 已知限制
@@ -383,8 +423,10 @@ macOS 默认隐藏以 `.` 开头的文件/文件夹（Windows 上叫「隐藏项
 
 ## 更新记录
 
+<!-- 新增：v1.1 更新记录 -->
 | 版本 | 内容 |
 | --- | --- |
+| v1.1 | **配置体验**：新增 `.env` 读取（`python-dotenv`）与网页「初始化配置」向导；支持 `POST /api/config` 写入凭据；页面首次加载完成后自动静默增量刷新；更换 Apple ID 时用账号指纹/失效标记避免旧账号缓存残留 |
 | v1.0 | **日历功能已实现**：日 / 周 / 月视图读取、新建、编辑（含循环日程「只改这一次」）、拖动改期、拖动改时长、删除（含「只删这一次 / 删除整个系列」），写操作真实写回 iCloud；**前端界面重做**（纸感配色、衬线标题、月视图连续滚动 + 粘性月份标题条）；**新增手机界面**（≤820px 日 / 月双视图、衬线星期 + 星期圆片条、4 格底部操作栏） |
 | v0.12 | 月视图**连续滚动**：一次渲染「当前月 ±1 个月」的连续周列表 + 粘性月份标题条，上下滚动时当前月自动高亮、相邻月变淡、标题条跟手滚；翻页 / 切视图 / 筛选后落到当前月顶部，改数据后滚动位置不再跳月 |
 | v0.11 | 周/日视图拖动改时长：单击（或长按）日程方块高亮后，拖上半部分改开始时间、拖下半部分改结束时间，实时读数、松手写回；修改（含月视图拖动改期、编辑保存、删除）后**不再把视图滚回顶部** |

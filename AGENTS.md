@@ -1,9 +1,11 @@
 # AGENTS.md
 
 ## 当前版本
-- 版本：v0.9 日程删除版
-- 状态：在 v0.8 基础上加入日程删除：双击日程进入的编辑面板在「取消 / 保存」同一行、同一套按钮样式内新增「删除日程」→ 二次确认，循环日程可选「只删这一次」（移除 override + 给 master 追加 `EXDATE`）或「删除整个系列」（删除整个资源）；新增 `DELETE /api/events/<uid>`（`scope` + 可选 `recurrenceId`），缓存分别按实例或按 uid 精确移除。
-- 验证：Python `py_compile` / `import app` + 路由表、假 CalDAV 集成测试（含 ICS 字节级断言，覆盖循环实例新建/更新/幂等/全天形态/EXDATE 只删此次/删除整系列/400 闸门/缓存实例替换与按 uid 移除/412 与 SSL EOF 重试）、前端 `node --check` + HTML/CSS 结构检查 + node 实跑前端请求体构造。真实 iCloud 写回验证需按 AGENTS 清单人工执行。
+<!-- 新增：v1.1 .env 配置向导版 -->
+- 版本：v1.1 .env 配置向导版
+- 状态：在 v0.9 基础上新增 `.env` 读取（`python-dotenv`）、网页「初始化配置」向导、`POST /api/config`、启动后静默增量刷新；更换 Apple ID 时用 `account_fingerprint` + `invalidated_at` 标记缓存归属。
+- 上一版本（v0.9）：在 v0.8 基础上加入日程删除：双击日程进入的编辑面板在「取消 / 保存」同一行、同一套按钮样式内新增「删除日程」→ 二次确认，循环日程可选「只删这一次」（移除 override + 给 master 追加 `EXDATE`）或「删除整个系列」（删除整个资源）；新增 `DELETE /api/events/<uid>`（`scope` + 可选 `recurrenceId`），缓存分别按实例或按 uid 精确移除。
+- 验证：Python `py_compile` / `import app` + 路由表、假 CalDAV 集成测试（含 ICS 字节级断言，覆盖循环实例新建/更新/幂等/全天形态/EXDATE 只删此次/删除整系列/400 闸门/缓存实例替换与按 uid 移除/412 与 SSL EOF 重试）、`.env`/`POST /api/config` 集成测试（写入、动态环境变量、账号指纹/失效标记、缓存优先）、前端内联脚本语法检查（当前环境用 `osascript -l JavaScript`；有 Node 时用 `node --check`）。真实 iCloud 写回验证需按 AGENTS 清单人工执行。
 
 ## 项目背景
 - 通过 CalDAV 读取 iCloud 日历，并在网页中展示。
@@ -13,13 +15,22 @@
 
 ## 当前结构
 - `icloud_calendar_probe.py`：已验证的 CalDAV 连接和事件解析逻辑。
-- `app.py`：Flask 服务，提供 `/api/events`、`/api/refresh`、`/api/status` 并托管前端。
-- `index.html`：日、周、月三种日历视图。
-- `requirements.txt`：Flask 和 caldav 依赖。
+<!-- 修改：app.py 新增 /api/config 与 .env 读取 -->
+- `app.py`：Flask 服务，提供 `/api/events`、`/api/refresh`、`/api/status`、`/api/config`，读取项目根目录 `.env` 并托管前端。
+- `index.html`：日、周、月三种日历视图，含「初始化配置」向导。
+<!-- 修改：补充 python-dotenv 依赖 -->
+- `requirements.txt`：Flask、caldav 和 python-dotenv 依赖。
+<!-- 新增：.env 模板与本地配置文件 -->
+- `env.example`：`.env` 模板（Apple ID、App 专用密码、可选 DeepSeek Key）。
+- `.env`：运行时由配置向导或手动创建，必须被 `.gitignore` 忽略。
 - `APPLE_DESIGN.md`：页面视觉设计参考。
 
 ## 必须遵守（Always）
-- CalDAV 认证使用 App 专用密码，从环境变量读取，绝不硬编码。
+<!-- 修改：凭据优先 .env，并补充配置向导规则 -->
+- CalDAV 认证使用 App 专用密码，凭据优先从项目根目录 `.env` 读取：必须调用 `load_dotenv(CONFIG_ENV_FILE, override=True)`；`.env` 中的同名值优先于系统环境变量；绝不硬编码。
+- `.env` 必须被 `.gitignore` 忽略；只提交 `env.example` 模板。绝不把 Apple ID、App 专用密码、DeepSeek Key、Token 写进代码、缓存或 Git。
+- `POST /api/config` 使用 `python-dotenv` 的 `set_key` 写入 `.env`，必须保留其他键和注释；写入成功后同步更新 `os.environ` 并调用 `invalidate_client_cache()`；响应不得回传密码/Key。
+- 更换 Apple ID 时，必须用缓存中的 `account_fingerprint`（SHA-256，不保存明文账号）和 `invalidated_at` 标记旧缓存；**禁止**在保存配置时主动清空 `events_cache.json`，下一次成功同步再替换；读取到失效标记/指纹不匹配/归属未知时必须重置同步令牌。
 - 每次改动后代码必须能直接运行，无语法错误。
 - 代码必须在 Windows 与 macOS 上都能直接运行：所有文件路径用 `Path(__file__).resolve().parent`（或 `app.root_path`）拼接，**禁止**硬编码 `D:\...`、`/Users/...`、`C:\Users\...` 之类的绝对路径；新增脚本/文档示例要同时给出 PowerShell 与 zsh 两种写法。
 - 前端继续使用原生 HTML、CSS 和 JavaScript，不引入前端框架。
@@ -31,11 +42,15 @@
 - `DELETE /api/events/<uid>` 用于删除日程：`scope` 取 `series`（默认，删除整个资源、含循环系列）或 `instance`（只删除循环日程的某一次，需带 `recurrenceId`）；非循环日程一律删除整个资源。
 - `POST /api/refresh` 手动触发缓存增量刷新。
 - `GET /api/status` 只读返回本地缓存状态（`updated_at`、`events`、`calendars`、`age_seconds`），供设置面板显示同步时间。
+<!-- 新增：POST /api/config -->
+- `POST /api/config` 保存凭据：接收 JSON `{appleId, appPassword, deepseekApiKey?}`，写入项目根目录 `.env` 并动态更新 `os.environ`；`deepseekApiKey` 可选，留空不覆盖已有值；成功返回 `{"ok": true}`。
 - 写回 iCalendar 必须使用 `component.add(name, value)`（配合 `component.pop`），**禁止** `component["DTSTART"] = datetime(...)`：icalendar 7.x 会把 datetime 直接 `str()` 成非法值，iCloud 会因此拒绝请求（412/400/500）。
 - 访问 iCloud 的路径遇到瞬时网络故障（SSL EOF、连接重置、超时、429/5xx）必须走 `call_with_network_retry`；网络类异常不得被当作“事件不存在”吞掉，必须冒泡给重试层。
 
 ## 先问再做（Ask First）
-- 引入任何新的第三方依赖。
+<!-- 修改：python-dotenv 已引入 -->
+- 引入任何新的第三方依赖（`python-dotenv` 已引入；新增其他依赖仍需先问）。
+- 修改 `.env` 的键名、写入格式，或改变“缺少配置时缓存优先”的口径。
 - 修改 CalDAV 查询的时间范围。
 - 修改 `/api/events` 的返回结构或字段含义。
 - 添加登录、数据库或其他超出上述功能范围的功能（设置面板的同步状态与深色模式属于现有功能范围；日程删除已实现，改动交互口径前先确认）。
@@ -43,8 +58,8 @@
 ## 绝不越界（Never）
 - 把 Apple ID、App 专用密码、Token 写进代码或提交到 Git。
 - 使用 eventkit-js 等只能在 macOS 运行的库。
-- 一次修改超过 3 个文件。
-- 提交 `.venv`、`__pycache__`、本地缓存或任何敏感配置。
+<!-- 修改：用户已明确取消“一次修改不超过 3 个文件”的旧限制 -->
+- 提交 `.venv`、`__pycache__`、本地缓存、`.env` / `.env.tmp` 或任何敏感配置。
 
 ## 当前功能边界
 - `/api/events` 默认查询今天前后各 30 天；前端离开已加载范围时会按视图范围重新请求。
@@ -76,6 +91,14 @@
 - CalDAV 客户端与日历列表缓存 5 分钟（`CALENDAR_CLIENT_TTL_SECONDS`，最小 30 秒），避免每次写入都重新做一次服务发现；HTTP 超时由 `CALENDAR_HTTP_TIMEOUT_SECONDS` 控制（默认 30 秒）。
 - iCloud 访问遇到瞬时网络故障会丢弃连接并重试最多 3 次（0.8s、1.6s 退避）；仍然失败时返回 503 与「连接 iCloud 失败，请稍后重试」，前端提示后把拖动的事件恢复到原位置。
 - 日历颜色内置映射：个人为绿色、家庭为黄色、课程为红色/粉色、课外为橙色、计划/作业为紫色，其他日历使用稳定的备用颜色。
+
+<!-- 新增：.env 配置向导、启动静默同步、账号切换缓存规则 -->
+- 凭据优先来自 `.env`（`load_dotenv(..., override=True)`）；`POST /api/config` 写入 `.env` 并更新 `os.environ`；`DEEPSEEK_API_KEY` 可选，留空不覆盖已有值。
+- 缺少凭据时：`GET /api/events` 当前范围有缓存则返回缓存；无可用缓存才返回 `503 {"error":"缺少配置：..."}`；`POST /api/refresh` 在缺少凭据时返回 503。
+- 前端 `initialize()` 遇到“缺少配置”会打开居中的「初始化配置」模态框（复用 `.event-sheet` 样式），也可通过 `/?setup=1` 强制打开；保存成功后 `window.location.reload()`。
+- 页面首次成功加载并渲染后调用一次 `silentRefresh()`（`POST /api/refresh`）：成功时静默更新 `allEvents`/`loadedRange` 并重绘，不弹 Toast；缺少配置时静默跳过；用户正在拖动/调整时长/打开编辑面板时放弃本次结果。
+- 账号变化：缓存写入 `account_fingerprint`（SHA-256，不保存明文账号）与 `invalidated_at`；`load_cache_bundle()` 遇到失效标记/指纹不匹配/归属未知会返回空缓存并重置同步令牌；`sync_cache()` 成功后清除标记并写入新指纹。
+- 旧版缓存没有 `account_fingerprint` 时：有配置且缓存非空按“归属未知”处理（忽略旧缓存并全量同步）；缺少配置时仍优先展示缓存。
 
 ## 本地运行
 
@@ -112,6 +135,9 @@ python -m pip install -r requirements.txt
 py -3 -m venv .venv
 & ".\.venv\Scripts\python.exe" -m pip install -r requirements.txt
 ```
+
+<!-- 新增：凭据优先 .env，也可用网页向导 -->
+凭据优先从项目根目录 `.env` 读取（`load_dotenv(..., override=True)`）；也可以继续用下面的系统环境变量。首次运行可直接启动后在网页向导填写，或复制 `env.example` 为 `.env` 手动填写。
 
 环境变量：Windows 用 `$env:ICLOUD_APPLE_ID = "..."` / `$env:ICLOUD_APP_PASSWORD = "..."`，macOS 用 `export ICLOUD_APPLE_ID="..."` / `export ICLOUD_APP_PASSWORD="..."`；两者都只对当前终端生效，重启终端后需重新设置。
 
