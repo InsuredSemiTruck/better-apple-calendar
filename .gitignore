@@ -5,3 +5,6 @@ events_cache.json*
 sync_token.json*
 .kagent/
 .DS_Store
+
+.env
+.env.tmp

@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
@@ -19,6 +20,7 @@ import caldav
 import icalendar
 from caldav.elements import dav
 from caldav.lib import error as caldav_error
+from dotenv import load_dotenv, set_key
 from flask import Flask, Response, jsonify, request, send_from_directory
 
 from icloud_calendar_probe import (
@@ -36,6 +38,10 @@ app = Flask(__name__)
 app.json.ensure_ascii = False
 
 BASE_DIR = Path(__file__).resolve().parent
+CONFIG_ENV_FILE = BASE_DIR / ".env"
+CONFIG_REQUIRED_KEYS = ("ICLOUD_APPLE_ID", "ICLOUD_APP_PASSWORD")
+load_dotenv(CONFIG_ENV_FILE)
+
 EVENTS_CACHE_FILE = BASE_DIR / "events_cache.json"
 SYNC_TOKEN_FILE = BASE_DIR / "sync_token.json"
 CACHE_VERSION = 2
@@ -159,12 +165,44 @@ def object_href(obj: Any) -> str:
 
 def empty_events_cache() -> dict[str, Any]:
     """创建空的本地事件缓存。"""
-    return {"version": CACHE_VERSION, "updated_at": None, "events": [], "coverage": {}}
+    return {
+        "version": CACHE_VERSION,
+        "updated_at": None,
+        "events": [],
+        "coverage": {},
+        "account_fingerprint": None,
+        "invalidated_at": None,
+    }
 
 
 def empty_token_state() -> dict[str, Any]:
     """创建空的同步令牌状态。"""
     return {"version": CACHE_VERSION, "calendars": {}}
+
+
+def account_fingerprint(apple_id: str | None = None) -> str:
+    """返回 Apple ID 的稳定指纹，用于判断缓存归属；不保存明文账号。"""
+    value = os.environ.get("ICLOUD_APPLE_ID", "")
+    if apple_id is not None:
+        value = apple_id
+    value = value.strip().lower()
+    if not value:
+        return ""
+    return hashlib.sha256(value.encode("utf-8")).hexdigest()
+
+
+def current_account_fingerprint() -> str:
+    """返回当前进程正在使用的账号指纹。"""
+    return account_fingerprint()
+
+
+def missing_configuration() -> list[str]:
+    """返回尚未配置的必需环境变量名。"""
+    missing = []
+    for name in CONFIG_REQUIRED_KEYS:
+        if not os.environ.get(name, "").strip():
+            missing.append(name)
+    return missing
 
 
 def read_json_file(path: Path, default: dict[str, Any]) -> dict[str, Any]:
@@ -184,6 +222,37 @@ def write_json_file(path: Path, value: dict[str, Any]) -> None:
     os.replace(temporary, path)
 
 
+def mark_cache_account_change(previous_apple_id: str, new_fingerprint: str) -> None:
+    """保存配置后更新缓存归属标记；账号变化时只打失效标记，不删除旧数据。"""
+    with _sync_lock:
+        cache = read_json_file(EVENTS_CACHE_FILE, empty_events_cache())
+        tokens = read_json_file(SYNC_TOKEN_FILE, empty_token_state())
+        cache.setdefault("events", [])
+        cache.setdefault("coverage", {})
+        cache.setdefault("account_fingerprint", None)
+        cache.setdefault("invalidated_at", None)
+        tokens.setdefault("calendars", {})
+        cached_fingerprint = str(cache.get("account_fingerprint") or "")
+        previous_env_fingerprint = account_fingerprint(previous_apple_id)
+        if cached_fingerprint:
+            account_changed = cached_fingerprint != new_fingerprint
+        elif previous_env_fingerprint:
+            account_changed = previous_env_fingerprint != new_fingerprint
+        else:
+            account_changed = bool(cache.get("events") or cache.get("coverage") or tokens.get("calendars"))
+        if account_changed:
+            cache["invalidated_at"] = iso_now()
+            tokens = empty_token_state()
+        elif cache.get("invalidated_at"):
+            tokens = empty_token_state()
+        else:
+            cache["account_fingerprint"] = new_fingerprint
+        try:
+            save_cache_bundle(cache, tokens)
+        except OSError:
+            app.logger.exception("更新缓存归属标记失败，读取时会按账号指纹忽略旧缓存")
+
+
 def load_cache_bundle() -> tuple[dict[str, Any], dict[str, Any]]:
     """加载事件缓存和同步令牌。"""
     cache = read_json_file(EVENTS_CACHE_FILE, empty_events_cache())
@@ -194,7 +263,27 @@ def load_cache_bundle() -> tuple[dict[str, Any], dict[str, Any]]:
         tokens = empty_token_state()
     cache.setdefault("events", [])
     cache.setdefault("coverage", {})
+    cache.setdefault("account_fingerprint", None)
+    cache.setdefault("invalidated_at", None)
     tokens.setdefault("calendars", {})
+
+    current_fingerprint = current_account_fingerprint()
+    cached_fingerprint = str(cache.get("account_fingerprint") or "")
+    invalidated = bool(cache.get("invalidated_at"))
+    unknown_owner = bool(
+        current_fingerprint
+        and not cached_fingerprint
+        and (cache.get("events") or cache.get("coverage") or tokens.get("calendars"))
+    )
+    if invalidated or unknown_owner or (
+        current_fingerprint and cached_fingerprint and current_fingerprint != cached_fingerprint
+    ):
+        cache = empty_events_cache()
+        tokens = empty_token_state()
+        if current_fingerprint:
+            cache["account_fingerprint"] = current_fingerprint
+    elif current_fingerprint:
+        cache["account_fingerprint"] = current_fingerprint
     return cache, tokens
 
 
@@ -244,6 +333,9 @@ def request_date_range() -> tuple[date, date, datetime, datetime]:
 
 def create_client() -> caldav.DAVClient:
     """创建 CalDAV 客户端；凭据始终来自环境变量。"""
+    missing = missing_configuration()
+    if missing:
+        raise RuntimeError("缺少配置：" + "、".join(missing))
     return caldav.DAVClient(
         url=os.environ.get("ICLOUD_CALDAV_URL", DEFAULT_CALDAV_URL).strip(),
         username=get_required_env("ICLOUD_APPLE_ID"),
@@ -729,6 +821,8 @@ def sync_cache(start_date: date, end_date: date, force_full: bool = False) -> di
                 remove_calendar_cache(cache, stale_key)
 
         cache["updated_at"] = iso_now()
+        cache["account_fingerprint"] = current_account_fingerprint()
+        cache.pop("invalidated_at", None)
         save_cache_bundle(cache, tokens)
         return cache
 
@@ -1148,6 +1242,11 @@ def json_response(payload: dict[str, Any], status: int = 200) -> Response:
     return response
 
 
+def config_required_error(missing: list[str]) -> Response:
+    """返回缺少配置错误，供前端弹出初始化向导。"""
+    return json_response({"error": "缺少配置：" + "、".join(missing)}, status=503)
+
+
 @app.get("/")
 def index() -> Response:
     """返回静态前端页面。"""
@@ -1157,11 +1256,57 @@ def index() -> Response:
     return response
 
 
+@app.post("/api/config")
+def save_config() -> Response:
+    """保存 iCloud/DeepSeek 配置到 .env，并立即更新当前进程的环境变量。"""
+    payload = request.get_json(silent=True)
+    if not isinstance(payload, dict):
+        return json_response({"error": "请求体必须是 JSON 对象"}, status=400)
+    apple_id = str(payload.get("appleId", "")).strip()
+    app_password = str(payload.get("appPassword", "")).strip()
+    deepseek_api_key = str(payload.get("deepseekApiKey", "") or "").strip()
+    if not apple_id:
+        return json_response({"error": "请填写 Apple ID"}, status=400)
+    if not app_password:
+        return json_response({"error": "请填写 App 专用密码"}, status=400)
+    if any(chr(10) in value or chr(13) in value for value in (apple_id, app_password, deepseek_api_key)):
+        return json_response({"error": "配置值不能包含换行"}, status=400)
+    previous_apple_id = os.environ.get("ICLOUD_APPLE_ID", "").strip()
+    new_fingerprint = account_fingerprint(apple_id)
+    updates = {"ICLOUD_APPLE_ID": apple_id, "ICLOUD_APP_PASSWORD": app_password}
+    if deepseek_api_key:
+        updates["DEEPSEEK_API_KEY"] = deepseek_api_key
+    try:
+        for key, value in updates.items():
+            set_key(str(CONFIG_ENV_FILE), key, value, quote_mode="always")
+        try:
+            os.chmod(CONFIG_ENV_FILE, 0o600)
+        except OSError:
+            pass
+        os.environ.update(updates)
+        mark_cache_account_change(previous_apple_id, new_fingerprint)
+    except Exception as exc:
+        app.logger.exception("保存配置失败")
+        return json_response(
+            {"error": "保存配置失败", "detail": f"{type(exc).__name__}: {exc}"},
+            status=500,
+        )
+    invalidate_client_cache()
+    return json_response({"ok": True})
+
+
 @app.get("/api/events")
 def api_events() -> Response:
     """读取事件，优先返回本地缓存。"""
     try:
         start_date, end_date, _, _ = request_date_range()
+        missing = missing_configuration()
+        if missing:
+            cache, _ = load_cache_bundle()
+            cached = cached_events_for_range(cache, start_date, end_date)
+            if cached or cache_range_covered(cache, start_date, end_date):
+                return json_response({"events": cached})
+            return config_required_error(missing)
         return json_response({"events": read_cached_or_sync(start_date, end_date)})
     except ValueError as exc:
         return json_response({"error": str(exc)}, status=400)
@@ -1900,6 +2045,9 @@ def manual_refresh() -> Response:
     """手动触发一次增量同步并返回最新缓存。"""
     try:
         start_date, end_date, _, _ = request_date_range()
+        missing = missing_configuration()
+        if missing:
+            return config_required_error(missing)
         cache = sync_cache(start_date, end_date, force_full=False)
         return json_response(
             {
