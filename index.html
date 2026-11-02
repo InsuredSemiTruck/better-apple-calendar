@@ -396,6 +396,23 @@
     .event-tooltip__dot{flex:0 0 auto;width:7px;height:7px;background:var(--event-color,#FFFDF8);border-radius:50%}
     .event-tooltip__calendar-name{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 
+    /* ===== v16 月视图日期格悬停：当天全部日程 ===== */
+    .day-preview{position:fixed;top:0;left:0;z-index:9998;display:grid;gap:7px;width:max-content;min-width:190px;max-width:min(300px,calc(100vw - 16px));padding:10px 12px 11px;color:var(--ink);background:color-mix(in srgb,var(--paper-raise) 94%,transparent);border:1px solid var(--hairline);border-radius:10px;box-shadow:0 14px 34px rgba(60,45,25,.2),0 2px 8px rgba(60,45,25,.08);backdrop-filter:blur(14px);-webkit-backdrop-filter:blur(14px);font-family:var(--font);font-size:12px;line-height:1.35;overflow-wrap:anywhere;pointer-events:none;will-change:transform;opacity:0;transition:opacity .12s ease;transform:translate3d(-9999px,-9999px,0)}
+    .day-preview[hidden]{display:none}
+    .day-preview.is-visible{opacity:1}
+    .day-preview__head{display:flex;align-items:baseline;justify-content:space-between;gap:10px;padding-bottom:6px;border-bottom:1px solid var(--hairline-soft)}
+    .day-preview__title{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--ink);font-family:var(--font-serif);font-size:13px;font-weight:600}
+    .day-preview__count{flex:0 0 auto;color:var(--ink-faint);font-size:11px;white-space:nowrap}
+    .day-preview__list{display:grid;gap:4px;margin:0;padding:0;list-style:none}
+    .day-preview__list[hidden]{display:none}
+    .day-preview__item{display:grid;grid-template-columns:40px 7px minmax(0,1fr);align-items:center;column-gap:7px;min-width:0}
+    .day-preview__time{color:var(--ink-muted);font-size:11px;font-variant-numeric:tabular-nums;white-space:nowrap}
+    .day-preview__dot{width:7px;height:7px;background:var(--event-color,#D2502C);border-radius:50%}
+    .day-preview__name{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--ink)}
+    .day-preview__empty{color:var(--ink-faint);font-size:12px}
+    .day-preview__empty[hidden]{display:none}
+    html[data-theme="dark"] .day-preview{box-shadow:0 16px 40px rgba(0,0,0,.5),0 2px 8px rgba(0,0,0,.3)}
+
   </style>
 </head>
 <body>
@@ -605,6 +622,14 @@
       <span class="event-tooltip__dot"></span>
       <span class="event-tooltip__calendar-name"></span>
     </div>
+  </div>
+  <div class="day-preview" id="day-preview" role="tooltip" aria-hidden="true" hidden>
+    <div class="day-preview__head">
+      <span class="day-preview__title"></span>
+      <span class="day-preview__count"></span>
+    </div>
+    <ul class="day-preview__list"></ul>
+    <div class="day-preview__empty" hidden>当天没有日程</div>
   </div>
   <div class="settings-popover" id="settings-panel" hidden>
     <h2>日历设置</h2>
@@ -865,6 +890,158 @@ function openEdit(event){closeDayEvents();if(!event.uid)return;editingUid=event.
     window.addEventListener("resize",hideEventTooltip);
     window.addEventListener("blur",hideEventTooltip);
     new MutationObserver(()=>hideEventTooltip()).observe(viewRoot,{childList:true});
+
+    /* ===== v16 月视图日期格悬停：当天全部日程 ===== */
+    const DAY_PREVIEW_DELAY=400;
+    const DAY_PREVIEW_GAP=8;
+    const DAY_PREVIEW_MARGIN=8;
+    const DAY_PREVIEW_CELL_SELECTOR=".month-day";
+    const DAY_PREVIEW_EXCLUDE_SELECTOR=".month-event,.month-span-event";
+
+    let dayPreviewNode=null;
+    let dayPreviewParts=null;
+    let dayPreviewTarget=null;
+    let dayPreviewTimer=0;
+    let dayPreviewVisible=false;
+
+    function getDayPreview(){
+      if(dayPreviewNode&&dayPreviewNode.isConnected)return dayPreviewNode;
+      dayPreviewNode=document.querySelector("#day-preview");
+      if(!dayPreviewNode)return null;
+      dayPreviewParts={
+        title:dayPreviewNode.querySelector(".day-preview__title"),
+        count:dayPreviewNode.querySelector(".day-preview__count"),
+        list:dayPreviewNode.querySelector(".day-preview__list"),
+        empty:dayPreviewNode.querySelector(".day-preview__empty")
+      };
+      return dayPreviewNode;
+    }
+
+    function dayPreviewEvents(day){
+      return visibleEvents()
+        .filter(event=>event.startDay<=day&&event.lastDay>=day)
+        .sort((a,b)=>a.start-b.start);
+    }
+
+    function fillDayPreview(day,events){
+      const node=getDayPreview();
+      if(!node||!dayPreviewParts)return false;
+      const{title,count,list,empty}=dayPreviewParts;
+      title.textContent=formatFullDate(day);
+      count.textContent=events.length?`${events.length} 个日程`:"";
+      list.replaceChildren();
+      for(const event of events){
+        const item=document.createElement("li");
+        item.className="day-preview__item";
+        item.style.setProperty("--event-color",event.color);
+        const time=document.createElement("span");
+        time.className="day-preview__time";
+        time.textContent=event.allDay?"全天":formatClock(event.start);
+        const dot=document.createElement("span");
+        dot.className="day-preview__dot";
+        const name=document.createElement("span");
+        name.className="day-preview__name";
+        name.textContent=event.title;
+        item.append(time,dot,name);
+        list.appendChild(item);
+      }
+      list.hidden=events.length===0;
+      empty.hidden=events.length>0;
+      return true;
+    }
+
+    function placeDayPreview(cell){
+      const node=getDayPreview();
+      if(!node)return;
+      const cellRect=cell.getBoundingClientRect();
+      const nodeRect=node.getBoundingClientRect();
+      const gap=DAY_PREVIEW_GAP,margin=DAY_PREVIEW_MARGIN;
+      const belowTop=cellRect.bottom+gap;
+      const aboveTop=cellRect.top-nodeRect.height-gap;
+      const preferAbove=cellRect.top+cellRect.height/2>window.innerHeight/2;
+      let top=preferAbove?aboveTop:belowTop;
+      if(top<margin||top+nodeRect.height>window.innerHeight-margin){
+        const fallback=preferAbove?belowTop:aboveTop;
+        if(fallback>=margin&&fallback+nodeRect.height<=window.innerHeight-margin)top=fallback;
+      }
+      const preferLeft=cellRect.left+cellRect.width/2>window.innerWidth/2;
+      let left=preferLeft?cellRect.right-nodeRect.width:cellRect.left;
+      left=Math.max(margin,Math.min(left,window.innerWidth-nodeRect.width-margin));
+      top=Math.max(margin,Math.min(top,window.innerHeight-nodeRect.height-margin));
+      node.style.transform=`translate3d(${Math.round(left)}px, ${Math.round(top)}px, 0)`;
+    }
+
+    function showDayPreview(){
+      if(!dayPreviewTarget||!dayPreviewTarget.isConnected)return;
+      if(dragState||resizeState||document.body.classList.contains("is-dragging-event"))return;
+      const day=parseDateValue(dayPreviewTarget.dataset.date);
+      if(!day)return;
+      if(!fillDayPreview(day,dayPreviewEvents(day)))return;
+      hideEventTooltip();
+      const node=getDayPreview();
+      if(!node)return;
+      node.hidden=false;
+      void node.offsetWidth;
+      placeDayPreview(dayPreviewTarget);
+      node.classList.add("is-visible");
+      node.setAttribute("aria-hidden","false");
+      dayPreviewVisible=true;
+    }
+
+    function hideDayPreview(){
+      window.clearTimeout(dayPreviewTimer);
+      dayPreviewTimer=0;
+      dayPreviewTarget=null;
+      if(!dayPreviewVisible)return;
+      dayPreviewVisible=false;
+      const node=getDayPreview();
+      if(!node)return;
+      node.classList.remove("is-visible");
+      node.setAttribute("aria-hidden","true");
+      node.hidden=true;
+    }
+
+    function scheduleDayPreview(cell){
+      window.clearTimeout(dayPreviewTimer);
+      dayPreviewTarget=cell;
+      dayPreviewTimer=window.setTimeout(()=>{
+        dayPreviewTimer=0;
+        if(!dayPreviewTarget||dayPreviewTarget!==cell)return;
+        showDayPreview();
+      },DAY_PREVIEW_DELAY);
+    }
+
+    function dayPreviewCellFrom(node){
+      return node instanceof Element?node.closest(DAY_PREVIEW_CELL_SELECTOR):null;
+    }
+
+    document.addEventListener("mouseover",mouseEvent=>{
+      if(!(mouseEvent.target instanceof Element))return;
+      const cell=dayPreviewCellFrom(mouseEvent.target);
+      if(mouseEvent.target.closest(DAY_PREVIEW_EXCLUDE_SELECTOR)){
+        hideDayPreview();
+        return;
+      }
+      if(!cell||cell===dayPreviewTarget)return;
+      hideDayPreview();
+      if(!hoverPointerQuery.matches)return;
+      if(!cell.dataset.date)return;
+      if(dragState||document.body.classList.contains("is-dragging-event"))return;
+      scheduleDayPreview(cell);
+    });
+
+    document.addEventListener("mouseout",mouseEvent=>{
+      const cell=dayPreviewCellFrom(mouseEvent.target);
+      if(!cell||cell!==dayPreviewTarget)return;
+      if(mouseEvent.relatedTarget instanceof Node&&cell.contains(mouseEvent.relatedTarget))return;
+      hideDayPreview();
+    });
+
+    document.addEventListener("pointerdown",hideDayPreview,true);
+    document.addEventListener("scroll",hideDayPreview,true);
+    window.addEventListener("resize",hideDayPreview);
+    window.addEventListener("blur",hideDayPreview);
+    new MutationObserver(()=>hideDayPreview()).observe(viewRoot,{childList:true});
     function bindEventDrag(element,calendarEvent){if(!calendarEvent.uid||isLongAllDay(calendarEvent))return;element.classList.add("can-drag");element.addEventListener("pointerdown",pointerEvent=>{if(pointerEvent.button!==0)return;const state={event:calendarEvent,element,pointerId:pointerEvent.pointerId,startX:pointerEvent.clientX,startY:pointerEvent.clientY,active:false,timer:null,ghost:null,target:null};state.timer=window.setTimeout(()=>{if(dragState!==state)return;state.active=true;suppressEditUntil=Date.now()+900;startDragGhost(state)},500);dragState=state})}
     function startDragGhost(state){const rect=state.element.getBoundingClientRect(),ghost=state.element.cloneNode(true);ghost.classList.add("drag-ghost");ghost.style.left=`${rect.left}px`;ghost.style.top=`${rect.top}px`;ghost.style.width=`${rect.width}px`;ghost.style.height=`${rect.height}px`;document.body.appendChild(ghost);state.ghost=ghost;state.element.classList.add("is-dragging");document.body.classList.add("is-dragging-event")}
     function clearDragTarget(state){if(state.target)state.target.classList.remove("is-drop-target");state.target=null}
