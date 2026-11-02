@@ -21,6 +21,7 @@ import icalendar
 from caldav.elements import dav
 from caldav.lib import error as caldav_error
 from dotenv import load_dotenv, set_key
+from openai import AuthenticationError, OpenAI
 from flask import Flask, Response, jsonify, request, send_from_directory
 
 from icloud_calendar_probe import (
@@ -64,6 +65,11 @@ except ValueError:
 
 NETWORK_RETRY_ATTEMPTS = 3
 NETWORK_RETRY_BASE_DELAY = 0.8
+
+DEEPSEEK_BASE_URL = "https://api.deepseek.com"
+DEEPSEEK_MODEL = "deepseek-chat"
+AI_PARSE_MAX_CHARS = 8000
+AI_WEEKDAYS = ("星期一", "星期二", "星期三", "星期四", "星期五", "星期六", "星期日")
 RETRYABLE_STATUS_PATTERN = re.compile(r"status (?:429|5\d\d)\b")
 RETRYABLE_TEXT_MARKERS = (
     "ssleoferror",
@@ -91,6 +97,10 @@ class EventNotFoundError(Exception):
 
 class EventConflictError(Exception):
     """iCloud 以 412 拒绝了本次修改（内容已被其他客户端改动）。"""
+
+
+class AIFormatError(Exception):
+    """AI 返回内容不符合约定的 JSON 数组格式。"""
 
 
 def get_timezone() -> timezone | ZoneInfo:
@@ -931,6 +941,120 @@ def parse_datetime_input(value: Any, tz: timezone | ZoneInfo) -> datetime | date
     return parsed
 
 
+def ai_system_prompt(current_date: date) -> str:
+    """构造 DeepSeek 解析日程的系统提示词。"""
+    weekday = AI_WEEKDAYS[current_date.weekday()]
+    lines = [
+        "你是一个日程解析助手。",
+        f"当前日期是 {current_date.isoformat()}（{weekday}）。",
+        "从用户文本中提取所有日程，只返回纯 JSON 数组，不要 Markdown 代码块，不要解释。",
+        "规则：",
+        "1. 将“今天 / 明天 / 后天 / 下周一 / 本周五”等相对日期转换为 YYYY-MM-DD。",
+        "2. 时间格式必须是 YYYY-MM-DDTHH:mm:ss。",
+        "3. 缺少结束时间时，结束时间 = 开始时间 + 1 小时。",
+        "4. 只有日期没有具体时间时，默认为当天 09:00:00 到 10:00:00。",
+        "5. 根据内容在标题末尾加一个合适的 Emoji：会议💼、生日🎂、运动🏃、吃饭🍽️、学习📚、看病🏥、旅行✈️、其他📌。",
+        "6. 每项必须包含 title、start、end、location；location 未知时用空字符串。",
+        "7. 没有日程时返回 []。",
+        "以下是格式示例（仅参考字段与格式，不要照抄日期）：",
+        "示例：[{\"title\":\"和李老师开会 💼\",\"start\":\"2026-11-03T15:00:00\",\"end\":\"2026-11-03T16:00:00\",\"location\":\"会议室\"}]",
+    ]
+    return chr(10).join(lines) + chr(10)
+
+
+def request_ai_completion(text: str, current_date: date) -> str:
+    """调用 DeepSeek（OpenAI 兼容接口）并返回原始文本。"""
+    api_key = os.environ.get("DEEPSEEK_API_KEY", "").strip()
+    if not api_key:
+        raise RuntimeError("缺少 DeepSeek API Key")
+    client = OpenAI(
+        api_key=api_key,
+        base_url=DEEPSEEK_BASE_URL,
+        timeout=HTTP_TIMEOUT_SECONDS,
+        max_retries=1,
+    )
+    response = client.chat.completions.create(
+        model=DEEPSEEK_MODEL,
+        messages=[
+            {"role": "system", "content": ai_system_prompt(current_date)},
+            {"role": "user", "content": text},
+        ],
+        temperature=0.2,
+        max_tokens=4000,
+    )
+    if not getattr(response, "choices", None):
+        raise AIFormatError("AI 响应为空")
+    content = getattr(response.choices[0].message, "content", None)
+    if not content:
+        raise AIFormatError("AI 响应为空")
+    return str(content)
+
+
+def strip_ai_json(content: str) -> str:
+    """去掉模型偶尔附带的 Markdown 代码围栏。"""
+    text = content.strip()
+    if not text.startswith("```"):
+        return text
+    lines = text.splitlines()
+    if lines:
+        lines = lines[1:]
+    if lines and lines[-1].strip().startswith("```"):
+        lines = lines[:-1]
+    return chr(10).join(lines).strip()
+
+
+def parse_ai_temporal(value: Any, tz: timezone | ZoneInfo) -> datetime | None:
+    """解析 AI 返回的日期时间；纯日期按当天 09:00 处理。"""
+    if not isinstance(value, str) or not value.strip():
+        return None
+    text = value.strip().replace("Z", "+00:00")
+    try:
+        if re.fullmatch(r"[0-9]{4}-[0-9]{2}-[0-9]{2}", text):
+            day = date.fromisoformat(text)
+            return datetime.combine(day, time(9, 0), tzinfo=tz)
+        parsed = datetime.fromisoformat(text)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=tz)
+    return parsed.astimezone(tz)
+
+
+def normalize_ai_events(content: str, tz: timezone | ZoneInfo) -> list[dict[str, str]]:
+    """把 AI 返回的 JSON 数组校验并归一化为前端可编辑的日程草稿。"""
+    text = strip_ai_json(content)
+    try:
+        raw = json.loads(text)
+    except json.JSONDecodeError as exc:
+        raise AIFormatError("AI 返回内容不是有效 JSON") from exc
+    if not isinstance(raw, list):
+        raise AIFormatError("AI 返回内容不是 JSON 数组")
+    events: list[dict[str, str]] = []
+    for index, item in enumerate(raw):
+        if not isinstance(item, dict):
+            raise AIFormatError(f"第 {index + 1} 项不是对象")
+        title = str(item.get("title", "")).strip()
+        if not title:
+            raise AIFormatError(f"第 {index + 1} 项缺少标题")
+        start = parse_ai_temporal(item.get("start"), tz)
+        if start is None:
+            raise AIFormatError(f"第 {index + 1} 项开始时间无效")
+        end = parse_ai_temporal(item.get("end"), tz)
+        if end is None or end <= start:
+            end = start + timedelta(hours=1)
+        location_raw = item.get("location", "")
+        location = location_raw.strip() if isinstance(location_raw, str) else ""
+        events.append(
+            {
+                "title": title,
+                "start": start.strftime("%Y-%m-%dT%H:%M:%S"),
+                "end": end.strftime("%Y-%m-%dT%H:%M:%S"),
+                "location": location,
+            }
+        )
+    return events
+
+
 def find_writable_calendar(calendars: list[Any], requested_name: str) -> Any:
     """查找目标日历，并兼容「计划」与「计划/作业」。"""
     requested = canonical_calendar_name(requested_name)
@@ -1325,6 +1449,43 @@ def save_config() -> Response:
         )
     invalidate_client_cache()
     return json_response({"ok": True})
+
+
+@app.post("/api/ai_parse")
+def ai_parse() -> Response:
+    """调用 DeepSeek 把一段文本解析成待确认的日程草稿；绝不写入日历。"""
+    payload = request.get_json(silent=True)
+    if not isinstance(payload, dict):
+        return json_response({"error": "请求体必须是 JSON 对象"}, status=400)
+    text = str(payload.get("text", "")).strip()
+    if not text:
+        return json_response({"error": "请粘贴包含日程的文本"}, status=400)
+    if len(text) > AI_PARSE_MAX_CHARS:
+        return json_response({"error": "文本过长，请分段提取"}, status=400)
+    tz = get_timezone()
+    current_date_raw = str(payload.get("current_date", "")).strip()
+    if current_date_raw:
+        try:
+            current_date = date.fromisoformat(current_date_raw)
+        except ValueError:
+            return json_response({"error": "current_date 必须使用 YYYY-MM-DD 格式"}, status=400)
+    else:
+        current_date = datetime.now(tz).date()
+    if not os.environ.get("DEEPSEEK_API_KEY", "").strip():
+        return json_response({"error": "缺少 DeepSeek API Key，请先在设置中配置"}, status=400)
+    try:
+        content = request_ai_completion(text, current_date)
+        events = normalize_ai_events(content, tz)
+    except AuthenticationError:
+        app.logger.warning("DeepSeek API Key 认证失败")
+        return json_response({"error": "DeepSeek API Key 无效，请重新配置"}, status=400)
+    except AIFormatError:
+        app.logger.exception("AI 日程解析返回格式错误")
+        return json_response({"error": "AI 返回格式错误"}, status=502)
+    except Exception:
+        app.logger.exception("AI 日程解析失败")
+        return json_response({"error": "AI 解析失败，请稍后重试"}, status=502)
+    return json_response({"events": events})
 
 
 @app.get("/api/events")

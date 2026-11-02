@@ -1,12 +1,13 @@
 # AGENTS.md
 
 ## 当前版本
-<!-- 新增：v1.2 设置面板配置入口版 -->
-- 版本：v1.2 设置面板配置入口版
-- 状态：在 v1.1 基础上新增设置面板「修改账号与配置」入口；配置模态框支持初始化/修改双模式、留空保留原值、`GET /api/config` 只返回是否已配置的布尔值；配置窗口支持右上角 × / 遮罩 / Esc 关闭。
+<!-- 新增：v1.3 AI 日程提取版 -->
+- 版本：v1.3 AI 日程提取版
+- 状态：在 v1.2 基础上新增 `POST /api/ai_parse`（DeepSeek / OpenAI SDK 兼容）、工具栏「AI 提取」入口、待确认卡片列表；只有用户点击「确认添加选中日程」后才逐条调用 `POST /api/events`，绝不自动写入。
+- 上一版本（v1.2）：在 v1.1 基础上新增设置面板「修改账号与配置」入口；配置模态框支持初始化/修改双模式、留空保留原值、`GET /api/config` 只返回是否已配置的布尔值；配置窗口支持右上角 × / 遮罩 / Esc 关闭。
 - 上一版本（v1.1）：在 v0.9 基础上新增 `.env` 读取（`python-dotenv`）、网页「初始化配置」向导、`POST /api/config`、启动后静默增量刷新；更换 Apple ID 时用 `account_fingerprint` + `invalidated_at` 标记缓存归属。
 - v0.9 基线：在 v0.8 基础上加入日程删除：双击日程进入的编辑面板在「取消 / 保存」同一行、同一套按钮样式内新增「删除日程」→ 二次确认，循环日程可选「只删这一次」（移除 override + 给 master 追加 `EXDATE`）或「删除整个系列」（删除整个资源）；新增 `DELETE /api/events/<uid>`（`scope` + 可选 `recurrenceId`），缓存分别按实例或按 uid 精确移除。
-- 验证：Python `py_compile` / `import app` + 路由表、假 CalDAV 集成测试（含 ICS 字节级断言，覆盖循环实例新建/更新/幂等/全天形态/EXDATE 只删此次/删除整系列/400 闸门/缓存实例替换与按 uid 移除/412 与 SSL EOF 重试）、`.env`/`POST /api/config` 集成测试（写入、动态环境变量、账号指纹/失效标记、缓存优先）、设置面板配置入口/部分更新测试（只改密码、只改 Key、换账号必须填密码、GET /api/config 仅布尔值）、前端内联脚本语法检查（当前环境用 `osascript -l JavaScript`；有 Node 时用 `node --check`）。真实 iCloud 写回验证需按 AGENTS 清单人工执行。
+- 验证：Python `py_compile` / `import app` + 路由表、假 CalDAV 集成测试（含 ICS 字节级断言，覆盖循环实例新建/更新/幂等/全天形态/EXDATE 只删此次/删除整系列/400 闸门/缓存实例替换与按 uid 移除/412 与 SSL EOF 重试）、`.env`/`POST /api/config` 集成测试（写入、动态环境变量、账号指纹/失效标记、缓存优先）、设置面板配置入口/部分更新测试（只改密码、只改 Key、换账号必须填密码、GET /api/config 仅布尔值）、AI 解析测试（缺少 Key、合法 JSON、结束时间 +1h、纯日期 09:00-10:00、格式错误 502、mocked DeepSeek）、前端内联脚本语法检查（当前环境用 `osascript -l JavaScript`；有 Node 时用 `node --check`）。真实 iCloud 写回验证需按 AGENTS 清单人工执行。
 
 ## 项目背景
 - 通过 CalDAV 读取 iCloud 日历，并在网页中展示。
@@ -17,10 +18,10 @@
 ## 当前结构
 - `icloud_calendar_probe.py`：已验证的 CalDAV 连接和事件解析逻辑。
 <!-- 修改：app.py 新增 /api/config 与 .env 读取 -->
-- `app.py`：Flask 服务，提供 `/api/events`、`/api/refresh`、`/api/status`、`/api/config`，读取项目根目录 `.env` 并托管前端。
-- `index.html`：日、周、月三种日历视图，含「初始化配置」向导与设置面板「修改账号与配置」入口。
+- `app.py`：Flask 服务，提供 `/api/events`、`/api/refresh`、`/api/status`、`/api/config`、`/api/ai_parse`，读取项目根目录 `.env`，并通过 DeepSeek / OpenAI SDK 兼容接口解析日程草稿。
+- `index.html`：日、周、月三种日历视图，含「初始化配置」向导、设置面板「修改账号与配置」入口，以及工具栏「AI 提取」和待确认卡片列表。
 <!-- 修改：补充 python-dotenv 依赖 -->
-- `requirements.txt`：Flask、caldav 和 python-dotenv 依赖。
+- `requirements.txt`：Flask、caldav、python-dotenv 和 openai 依赖。
 <!-- 新增：.env 模板与本地配置文件 -->
 - `env.example`：`.env` 模板（Apple ID、App 专用密码、可选 DeepSeek Key）。
 - `.env`：运行时由配置向导或手动创建，必须被 `.gitignore` 忽略。
@@ -46,12 +47,15 @@
 <!-- 修改：POST /api/config 支持部分更新；新增 GET /api/config -->
 - `POST /api/config` 保存凭据：接收 JSON `{appleId?, appPassword?, deepseekApiKey?}`；留空字段保留原值；更换 Apple ID 时必须同时填写新的 App 专用密码；成功返回 `{"ok": true}`，不得回传凭据。
 - `GET /api/config` 只返回 `configured` 布尔值（`appleId`/`appPassword`/`deepseekApiKey`）与 `missing` 变量名，绝不下发凭据本身。
+<!-- 新增：POST /api/ai_parse -->
+- `POST /api/ai_parse` 只解析不写入：接收 `{text, current_date}`，使用 `DEEPSEEK_API_KEY` 调用 `https://api.deepseek.com` 的 `deepseek-chat`，返回 `{"events":[{title,start,end,location}]}`；缺少 Key 返回 400，AI 格式/接口错误返回 502；绝不调用创建接口。
 - 写回 iCalendar 必须使用 `component.add(name, value)`（配合 `component.pop`），**禁止** `component["DTSTART"] = datetime(...)`：icalendar 7.x 会把 datetime 直接 `str()` 成非法值，iCloud 会因此拒绝请求（412/400/500）。
 - 访问 iCloud 的路径遇到瞬时网络故障（SSL EOF、连接重置、超时、429/5xx）必须走 `call_with_network_retry`；网络类异常不得被当作“事件不存在”吞掉，必须冒泡给重试层。
 
 ## 先问再做（Ask First）
 <!-- 修改：python-dotenv 已引入 -->
-- 引入任何新的第三方依赖（`python-dotenv` 已引入；新增其他依赖仍需先问）。
+- 引入任何新的第三方依赖（`python-dotenv`、`openai` 已引入；新增其他依赖仍需先问）。
+- 修改 AI 解析的模型 / 提示词 / 确认流程，或让 AI 结果自动写入日历。
 - 修改 `.env` 的键名、写入格式，或改变“缺少配置时缓存优先”的口径。
 - 修改 CalDAV 查询的时间范围。
 - 修改 `/api/events` 的返回结构或字段含义。
@@ -107,6 +111,13 @@
 - 留空字段保留原值：只改密码、只改 DeepSeek Key、只改同账号 Apple ID 都不应覆盖其他配置；三项全空返回 400。
 - 更换 Apple ID 且 App 专用密码留空时返回 400「更换 Apple ID 时必须填写新的 App 专用密码」；Apple ID 变化时仍沿用 `account_fingerprint` / `invalidated_at` 让旧缓存失效。
 - 保存成功后 `window.location.reload()`；页面启动时的 `silentRefresh()` 负责重新同步。`GET /api/config` 与 `POST /api/config` 响应均不得包含凭据。
+
+<!-- 新增：AI 解析 / 待确认 / 写入规则 -->
+- 工具栏 ✨「AI 提取」把用户文本发送到 `POST /api/ai_parse`；只有用户主动点击「智能提取」时才发送，AI 只返回草稿。
+- AI 结果必须是 JSON 数组；后端校验 title/start/end/location，结束时间缺失或早于开始时间时补 `+1h`，纯日期补 09:00-10:00；无效格式返回 502。
+- 待确认弹窗复用 `.event-sheet`，卡片可编辑标题/开始/结束/地点；复选框默认勾选；顶部提供全局「添加到日历」选择。
+- 只有点击「确认添加选中日程」后才逐条调用 `POST /api/events`；全部成功后关闭弹窗、刷新当前视图并 `showToast("成功添加 X 个日程")`；中途失败保留剩余卡片可重试，绝不自动写入。
+- 不在日志中记录用户文本或 AI 原文；DeepSeek API Key 只在后端使用；用户文本仅在主动使用 AI 提取时发送给 DeepSeek。
 
 ## 本地运行
 
