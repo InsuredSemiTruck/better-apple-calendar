@@ -1,11 +1,12 @@
 # AGENTS.md
 
 ## 当前版本
-<!-- 新增：v1.1 .env 配置向导版 -->
-- 版本：v1.1 .env 配置向导版
-- 状态：在 v0.9 基础上新增 `.env` 读取（`python-dotenv`）、网页「初始化配置」向导、`POST /api/config`、启动后静默增量刷新；更换 Apple ID 时用 `account_fingerprint` + `invalidated_at` 标记缓存归属。
-- 上一版本（v0.9）：在 v0.8 基础上加入日程删除：双击日程进入的编辑面板在「取消 / 保存」同一行、同一套按钮样式内新增「删除日程」→ 二次确认，循环日程可选「只删这一次」（移除 override + 给 master 追加 `EXDATE`）或「删除整个系列」（删除整个资源）；新增 `DELETE /api/events/<uid>`（`scope` + 可选 `recurrenceId`），缓存分别按实例或按 uid 精确移除。
-- 验证：Python `py_compile` / `import app` + 路由表、假 CalDAV 集成测试（含 ICS 字节级断言，覆盖循环实例新建/更新/幂等/全天形态/EXDATE 只删此次/删除整系列/400 闸门/缓存实例替换与按 uid 移除/412 与 SSL EOF 重试）、`.env`/`POST /api/config` 集成测试（写入、动态环境变量、账号指纹/失效标记、缓存优先）、前端内联脚本语法检查（当前环境用 `osascript -l JavaScript`；有 Node 时用 `node --check`）。真实 iCloud 写回验证需按 AGENTS 清单人工执行。
+<!-- 新增：v1.2 设置面板配置入口版 -->
+- 版本：v1.2 设置面板配置入口版
+- 状态：在 v1.1 基础上新增设置面板「修改账号与配置」入口；配置模态框支持初始化/修改双模式、留空保留原值、`GET /api/config` 只返回是否已配置的布尔值；配置窗口支持右上角 × / 遮罩 / Esc 关闭。
+- 上一版本（v1.1）：在 v0.9 基础上新增 `.env` 读取（`python-dotenv`）、网页「初始化配置」向导、`POST /api/config`、启动后静默增量刷新；更换 Apple ID 时用 `account_fingerprint` + `invalidated_at` 标记缓存归属。
+- v0.9 基线：在 v0.8 基础上加入日程删除：双击日程进入的编辑面板在「取消 / 保存」同一行、同一套按钮样式内新增「删除日程」→ 二次确认，循环日程可选「只删这一次」（移除 override + 给 master 追加 `EXDATE`）或「删除整个系列」（删除整个资源）；新增 `DELETE /api/events/<uid>`（`scope` + 可选 `recurrenceId`），缓存分别按实例或按 uid 精确移除。
+- 验证：Python `py_compile` / `import app` + 路由表、假 CalDAV 集成测试（含 ICS 字节级断言，覆盖循环实例新建/更新/幂等/全天形态/EXDATE 只删此次/删除整系列/400 闸门/缓存实例替换与按 uid 移除/412 与 SSL EOF 重试）、`.env`/`POST /api/config` 集成测试（写入、动态环境变量、账号指纹/失效标记、缓存优先）、设置面板配置入口/部分更新测试（只改密码、只改 Key、换账号必须填密码、GET /api/config 仅布尔值）、前端内联脚本语法检查（当前环境用 `osascript -l JavaScript`；有 Node 时用 `node --check`）。真实 iCloud 写回验证需按 AGENTS 清单人工执行。
 
 ## 项目背景
 - 通过 CalDAV 读取 iCloud 日历，并在网页中展示。
@@ -17,7 +18,7 @@
 - `icloud_calendar_probe.py`：已验证的 CalDAV 连接和事件解析逻辑。
 <!-- 修改：app.py 新增 /api/config 与 .env 读取 -->
 - `app.py`：Flask 服务，提供 `/api/events`、`/api/refresh`、`/api/status`、`/api/config`，读取项目根目录 `.env` 并托管前端。
-- `index.html`：日、周、月三种日历视图，含「初始化配置」向导。
+- `index.html`：日、周、月三种日历视图，含「初始化配置」向导与设置面板「修改账号与配置」入口。
 <!-- 修改：补充 python-dotenv 依赖 -->
 - `requirements.txt`：Flask、caldav 和 python-dotenv 依赖。
 <!-- 新增：.env 模板与本地配置文件 -->
@@ -42,8 +43,9 @@
 - `DELETE /api/events/<uid>` 用于删除日程：`scope` 取 `series`（默认，删除整个资源、含循环系列）或 `instance`（只删除循环日程的某一次，需带 `recurrenceId`）；非循环日程一律删除整个资源。
 - `POST /api/refresh` 手动触发缓存增量刷新。
 - `GET /api/status` 只读返回本地缓存状态（`updated_at`、`events`、`calendars`、`age_seconds`），供设置面板显示同步时间。
-<!-- 新增：POST /api/config -->
-- `POST /api/config` 保存凭据：接收 JSON `{appleId, appPassword, deepseekApiKey?}`，写入项目根目录 `.env` 并动态更新 `os.environ`；`deepseekApiKey` 可选，留空不覆盖已有值；成功返回 `{"ok": true}`。
+<!-- 修改：POST /api/config 支持部分更新；新增 GET /api/config -->
+- `POST /api/config` 保存凭据：接收 JSON `{appleId?, appPassword?, deepseekApiKey?}`；留空字段保留原值；更换 Apple ID 时必须同时填写新的 App 专用密码；成功返回 `{"ok": true}`，不得回传凭据。
+- `GET /api/config` 只返回 `configured` 布尔值（`appleId`/`appPassword`/`deepseekApiKey`）与 `missing` 变量名，绝不下发凭据本身。
 - 写回 iCalendar 必须使用 `component.add(name, value)`（配合 `component.pop`），**禁止** `component["DTSTART"] = datetime(...)`：icalendar 7.x 会把 datetime 直接 `str()` 成非法值，iCloud 会因此拒绝请求（412/400/500）。
 - 访问 iCloud 的路径遇到瞬时网络故障（SSL EOF、连接重置、超时、429/5xx）必须走 `call_with_network_retry`；网络类异常不得被当作“事件不存在”吞掉，必须冒泡给重试层。
 
@@ -99,6 +101,12 @@
 - 页面首次成功加载并渲染后调用一次 `silentRefresh()`（`POST /api/refresh`）：成功时静默更新 `allEvents`/`loadedRange` 并重绘，不弹 Toast；缺少配置时静默跳过；用户正在拖动/调整时长/打开编辑面板时放弃本次结果。
 - 账号变化：缓存写入 `account_fingerprint`（SHA-256，不保存明文账号）与 `invalidated_at`；`load_cache_bundle()` 遇到失效标记/指纹不匹配/归属未知会返回空缓存并重置同步令牌；`sync_cache()` 成功后清除标记并写入新指纹。
 - 旧版缓存没有 `account_fingerprint` 时：有配置且缓存非空按“归属未知”处理（忽略旧缓存并全量同步）；缺少配置时仍优先展示缓存。
+
+<!-- 新增：设置面板配置入口 / 部分更新规则 -->
+- 设置面板提供「修改账号与配置」入口，复用 `#config-modal`：`modify` 模式标题为“修改账号与配置”、按钮为“保存”；输入框始终空白，`GET /api/config` 只用于显示“已配置（如需修改请重新输入）”；可通过右上角 × / 遮罩 / Esc 关闭，关闭不保存修改。
+- 留空字段保留原值：只改密码、只改 DeepSeek Key、只改同账号 Apple ID 都不应覆盖其他配置；三项全空返回 400。
+- 更换 Apple ID 且 App 专用密码留空时返回 400「更换 Apple ID 时必须填写新的 App 专用密码」；Apple ID 变化时仍沿用 `account_fingerprint` / `invalidated_at` 让旧缓存失效。
+- 保存成功后 `window.location.reload()`；页面启动时的 `silentRefresh()` 负责重新同步。`GET /api/config` 与 `POST /api/config` 响应均不得包含凭据。
 
 ## 本地运行
 

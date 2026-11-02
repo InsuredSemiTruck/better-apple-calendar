@@ -1256,6 +1256,21 @@ def index() -> Response:
     return response
 
 
+@app.get("/api/config")
+def get_config_status() -> Response:
+    """只返回哪些配置已存在，绝不下发凭据本身。"""
+    return json_response(
+        {
+            "configured": {
+                "appleId": bool(os.environ.get("ICLOUD_APPLE_ID", "").strip()),
+                "appPassword": bool(os.environ.get("ICLOUD_APP_PASSWORD", "").strip()),
+                "deepseekApiKey": bool(os.environ.get("DEEPSEEK_API_KEY", "").strip()),
+            },
+            "missing": missing_configuration(),
+        }
+    )
+
+
 @app.post("/api/config")
 def save_config() -> Response:
     """保存 iCloud/DeepSeek 配置到 .env，并立即更新当前进程的环境变量。"""
@@ -1265,15 +1280,32 @@ def save_config() -> Response:
     apple_id = str(payload.get("appleId", "")).strip()
     app_password = str(payload.get("appPassword", "")).strip()
     deepseek_api_key = str(payload.get("deepseekApiKey", "") or "").strip()
-    if not apple_id:
-        return json_response({"error": "请填写 Apple ID"}, status=400)
-    if not app_password:
-        return json_response({"error": "请填写 App 专用密码"}, status=400)
     if any(chr(10) in value or chr(13) in value for value in (apple_id, app_password, deepseek_api_key)):
         return json_response({"error": "配置值不能包含换行"}, status=400)
-    previous_apple_id = os.environ.get("ICLOUD_APPLE_ID", "").strip()
-    new_fingerprint = account_fingerprint(apple_id)
-    updates = {"ICLOUD_APPLE_ID": apple_id, "ICLOUD_APP_PASSWORD": app_password}
+    if not apple_id and not app_password and not deepseek_api_key:
+        return json_response({"error": "请至少填写一项配置"}, status=400)
+
+    existing_apple_id = os.environ.get("ICLOUD_APPLE_ID", "").strip()
+    existing_app_password = os.environ.get("ICLOUD_APP_PASSWORD", "").strip()
+    effective_apple_id = apple_id or existing_apple_id
+    effective_app_password = app_password or existing_app_password
+    if not effective_apple_id:
+        return json_response({"error": "请填写 Apple ID"}, status=400)
+    if not effective_app_password:
+        return json_response({"error": "请填写 App 专用密码"}, status=400)
+    if apple_id and apple_id != existing_apple_id and not app_password:
+        return json_response(
+            {"error": "更换 Apple ID 时必须填写新的 App 专用密码"},
+            status=400,
+        )
+
+    previous_apple_id = existing_apple_id
+    new_fingerprint = account_fingerprint(effective_apple_id)
+    updates = {}
+    if apple_id:
+        updates["ICLOUD_APPLE_ID"] = apple_id
+    if app_password:
+        updates["ICLOUD_APP_PASSWORD"] = app_password
     if deepseek_api_key:
         updates["DEEPSEEK_API_KEY"] = deepseek_api_key
     try:
